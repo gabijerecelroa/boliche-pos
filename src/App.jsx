@@ -26,7 +26,7 @@ function App() {
   const [metodoPagoPOS, setMetodoPagoPOS] = useState('efectivo');
   const [verDetalleModal, setVerDetalleModal] = useState(null);
   const [qrGenerado, setQrGenerado] = useState(null);
-  const [mostrarEscaner, setMostrarEscaner] = useState(false); // <--- ESTADO PARA LA CÁMARA
+  const [mostrarEscaner, setMostrarEscaner] = useState(false);
 
   // Formularios Admin
   const [movTipo, setMovTipo] = useState('salida');
@@ -132,6 +132,37 @@ function App() {
     setFiltroQR(''); await cargarDatos(); setLoading(false);
   };
 
+  // NUEVO: PROCESAMIENTO AUTOMÁTICO DE ESCÁNER
+  const procesarEscaneoAutomatico = async (textoCodigo) => {
+    setMostrarEscaner(false); // Cierra la cámara de inmediato
+    
+    // Busca el código escaneado
+    const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === textoCodigo.toUpperCase());
+    
+    if (!listaEncontrada) {
+      alert('❌ CÓDIGO INVÁLIDO O INEXISTENTE.\nEste código no pertenece a esta fiesta.');
+      return;
+    }
+    
+    if (listaEncontrada.estado === 'ingresado') {
+      alert(`⚠️ CUIDADO: CÓDIGO YA USADO ANTES.\n\nEl pase VIP de ${listaEncontrada.nombre} ya fue marcado como ingresado. No dejar pasar.`);
+      setFiltroQR(textoCodigo); // Se lo dejamos en la barra de búsqueda para que el guardia vea el registro
+      return;
+    }
+
+    // Si todo está bien, le da ingreso instantáneo
+    setLoading(true);
+    await supabase.from('listas_vip').update({ estado: 'ingresado' }).eq('id', listaEncontrada.id);
+    await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: listaEncontrada.nombre, cantidad: listaEncontrada.cantidad, precio_unitario: 0, total: 0 }]);
+    
+    setFiltroQR(''); 
+    await cargarDatos(); 
+    setLoading(false);
+
+    // Alerta de Éxito para el guardia
+    alert(`✅ ACCESO PERMITIDO ✅\n\nVIP: ${listaEncontrada.nombre}\nPASAN: ${listaEncontrada.cantidad} PERSONAS`);
+  };
+
   /* ----- MÓDULO VENTAS (BARRA) ----- */
   const agregarAlCarrito = (producto) => {
     if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock disponible');
@@ -226,14 +257,13 @@ function App() {
     );
   }
 
-  // VISTA EXCLUSIVA: USUARIO DE PUERTA (Control QR con Cámara)
+  // VISTA EXCLUSIVA: USUARIO DE PUERTA (Control QR con Cámara y Escaneo Automático)
   if (user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
         
-        {/* MODAL DE CÁMARA (ESCÁNER QR) */}
         {mostrarEscaner && (
           <div className="fixed inset-0 bg-black z-[100] flex flex-col">
             <div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8">
@@ -245,12 +275,8 @@ function App() {
                   <Scanner 
                     onScan={(result) => {
                       if (!result) return;
-                      // Soporte para v1 y v2 de la librería
                       const texto = Array.isArray(result) ? result[0].rawValue : (result.text || result);
-                      if (texto) {
-                        setFiltroQR(texto);
-                        setMostrarEscaner(false);
-                      }
+                      if (texto) procesarEscaneoAutomatico(texto); // Llama a la función automática
                     }}
                     onError={(e) => console.log(e?.message)}
                   />
@@ -281,7 +307,7 @@ function App() {
             
             <div className="flex gap-3">
               <div className="relative flex-1">
-                <input type="text" placeholder="Buscar VIP..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} />
+                <input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} />
                 <span className="absolute left-4 top-4 text-xl">🔍</span>
               </div>
               <button onClick={() => setMostrarEscaner(true)} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center">📷</button>
@@ -333,7 +359,6 @@ function App() {
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
         {barraHeader}
         
-        {/* Modal QR Creado */}
         {qrGenerado && (
           <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
             <div className="bg-white p-6 rounded-3xl w-full max-w-sm text-center shadow-[0_0_40px_rgba(147,51,234,0.6)]">
@@ -480,7 +505,7 @@ function App() {
   if (vista === 'admin') {
     if (!sesionActiva) {
       return (
-        <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)]">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas Vendidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>
+        <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)]">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Ingresos:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista} pers.</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas Vendidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>
       );
     }
     return (
