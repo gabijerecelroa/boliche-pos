@@ -10,7 +10,7 @@ function App() {
   const [sesionActiva, setSesionActiva] = useState(null);
   const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
   const [historial, setHistorial] = useState([]);
-  const [sesionExpandida, setSesionExpandida] = useState(null); // Para ver detalles en el historial
+  const [sesionExpandida, setSesionExpandida] = useState(null);
 
   // Estados de Caja
   const [bebidas, setBebidas] = useState([]);
@@ -34,17 +34,14 @@ function App() {
   const [nuevaCat, setNuevaCat] = useState('bebida');
 
   const cargarDatos = async () => {
-    // 1. Cargar Menú
     const { data: prods } = await supabase.from('bebidas').select('*').order('id');
     if (prods) setBebidas(prods);
 
-    // 2. Si es Admin, cargar el historial de fiestas pasadas siempre
     if (user?.rol === 'admin') {
       const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false });
       if (hist) setHistorial(hist);
     }
 
-    // 3. Buscar caja abierta (usando limit(1) para evitar errores si no hay)
     const { data: sesionData } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
     const sesion = sesionData && sesionData.length > 0 ? sesionData[0] : null;
     
@@ -161,7 +158,6 @@ function App() {
     if (!window.confirm('⚠️ ¿Estás seguro de CERRAR CAJA definitivamente y volver a cero?')) return;
     setLoading(true);
 
-    // Calcular Ranking de Ventas para el Historial
     let conteoProductos = {};
     ventasSesion.forEach(v => {
       v.detalles.forEach(item => {
@@ -178,7 +174,7 @@ function App() {
       recaudacion_transf: CAJA_BANCO,
       total_salidas: salidasEfec + salidasTransf,
       total_ingresos: entradasExtraEfec + entradasExtraTransf,
-      ranking_ventas: conteoProductos // Guardamos las más vendidas
+      ranking_ventas: conteoProductos
     };
 
     await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id);
@@ -224,7 +220,6 @@ function App() {
     );
   }
 
-  // TICKETS (Venta o Cierre)
   if (ticketActual) {
     return (
       <div className="min-h-screen bg-black text-white p-6 flex flex-col items-center justify-center">
@@ -282,7 +277,6 @@ function App() {
     );
   }
 
-  // ESTRUCTURA COMÚN: Header
   const barraHeader = (
     <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex justify-between items-center mb-4 rounded-b-xl lg:rounded-xl">
       <div>
@@ -304,8 +298,6 @@ function App() {
         <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
           {barraHeader}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-            
-            {/* Columna APERTURA */}
             <div className="lg:col-span-1">
               <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl">
                 <h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2>
@@ -317,12 +309,9 @@ function App() {
               </div>
             </div>
 
-            {/* Columna HISTORIAL DETALLADO */}
             <div className="lg:col-span-2">
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]">
-                <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">
-                  📚 Historial y Estadísticas de Cierres
-                </h2>
+                <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2>
                 <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
                   {historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres registrados aún.</p> :
                     historial.map(h => (
@@ -334,11 +323,10 @@ function App() {
                           </div>
                           <div className="text-right">
                             <p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p>
-                            <p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Ver Detalles'}</p>
+                            <p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p>
                           </div>
                         </div>
                         
-                        {/* Acordeón de Detalles */}
                         {sesionExpandida === h.id && (
                           <div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
@@ -352,19 +340,13 @@ function App() {
                               </div>
                             </div>
                             <div>
-                              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top 5 Bebidas Vendidas</h4>
+                              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas Vendidas</h4>
                               <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
                                 {h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (
-                                  Object.entries(h.ranking_ventas)
-                                    .sort(([,a], [,b]) => b - a)
-                                    .slice(0, 5)
-                                    .map(([nombre, cant]) => (
-                                      <div key={nombre} className="flex justify-between border-b border-gray-700 pb-1">
-                                        <span className="truncate pr-2 text-gray-300">{nombre}</span>
-                                        <span className="font-black text-yellow-400">{cant}x</span>
-                                      </div>
-                                    ))
-                                ) : <span className="text-gray-500 text-xs">Sin datos de productos en esta fiesta.</span>}
+                                  Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (
+                                    <div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>
+                                  ))
+                                ) : <span className="text-gray-500 text-xs">Sin datos.</span>}
                               </div>
                             </div>
                           </div>
@@ -380,12 +362,10 @@ function App() {
       );
     }
 
-    // SI LA CAJA ESTÁ ABIERTA (DASHBOARD FINANCIERO)
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
         
-        {/* Modal de Detalles Interactivos */}
         {verDetalleModal && (
           <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col">
@@ -456,7 +436,7 @@ function App() {
                 <input type="text" placeholder="Concepto del movimiento" className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={movConcepto} onChange={e => setMovConcepto(e.target.value)} required />
                 <div className="flex space-x-2">
                   <input type="number" placeholder="Monto $" className="w-2/3 bg-gray-700 p-3 rounded-lg font-bold focus:outline-none" value={movMonto} onChange={e => setMovMonto(e.target.value)} required />
-                  <select className="w-1/3 bg-gray-700 p-3 rounded-lg focus:outline-none" value={movMetodo} onChange={e => setMovMetodo(e.target.value)}><option value="efectivo">Efectivo</option><option value="transferencia">Transf</option></select>
+                  <select className="w-1/3 bg-gray-700 p-3 rounded-lg focus:outline-none text-sm" value={movMetodo} onChange={e => setMovMetodo(e.target.value)}><option value="efectivo">Efectivo</option><option value="transferencia">Transf</option></select>
                 </div>
                 <button type="submit" disabled={loading} className="w-full bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-lg font-black uppercase text-sm">Registrar</button>
               </form>
@@ -472,6 +452,7 @@ function App() {
                 <p className="text-xl font-black text-green-400">${capitalEnBarra}</p>
               </div>
             </div>
+
             <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 mb-6 bg-gray-700/50 p-3 rounded-xl border border-gray-600">
               <input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required />
               <input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required />
@@ -488,7 +469,7 @@ function App() {
                   <div className="flex justify-between items-center mb-3"><span className="text-green-400 font-black text-lg">${b.precio}</span><span className={`font-bold text-xs bg-gray-800 px-2 py-1 rounded ${b.stock < 10 ? 'text-red-400' : 'text-gray-300'}`}>Stock: {b.stock}</span></div>
                   <div className="flex space-x-2">
                     <button type="button" onClick={async () => { const n = prompt('Nuevo precio:', b.precio); if (n) { await supabase.from('bebidas').update({precio:Number(n)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-gray-600 hover:bg-gray-500 py-2 rounded text-xs font-bold uppercase transition">Cambiar $</button>
-                    <button type="button" onClick={async () => { const s = prompt('Sumar stock:', 10); if (s) { await supabase.from('bebidas').update({stock:b.stock+Number(s)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold uppercase transition">+ Stock</button>
+                    <button type="button" onClick={async () => { const s = prompt(`Stock real y exacto de ${b.nombre}:`, b.stock); if (s !== null && s !== '' && !isNaN(s)) { await supabase.from('bebidas').update({stock:Number(s)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold uppercase transition">Mod. Stock</button>
                   </div>
                 </div>
               ))}
