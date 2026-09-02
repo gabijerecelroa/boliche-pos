@@ -6,25 +6,28 @@ function App() {
   const [vista, setVista] = useState('login');
   const [loading, setLoading] = useState(false);
 
-  // Sesiones e Historial
+  // Sesión y General
   const [sesionActiva, setSesionActiva] = useState(null);
   const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
   const [historial, setHistorial] = useState([]);
   const [sesionExpandida, setSesionExpandida] = useState(null);
 
-  // Estados de Caja y Proveedores
+  // Estados de Base de Datos
   const [bebidas, setBebidas] = useState([]);
+  const [proveedores, setProveedores] = useState([]);
+  
+  // Estados de Sesión Activa
+  const [ventasSesion, setVentasSesion] = useState([]);
+  const [movsSesion, setMovsSesion] = useState([]);
+  const [puertaSesion, setPuertaSesion] = useState([]);
+  
+  // Estados UI
   const [carrito, setCarrito] = useState([]);
   const [ticketActual, setTicketActual] = useState(null);
   const [metodoPagoPOS, setMetodoPagoPOS] = useState('efectivo');
-  const [proveedores, setProveedores] = useState([]);
-
-  // Estados del Dashboard (Admin)
-  const [ventasSesion, setVentasSesion] = useState([]);
-  const [movsSesion, setMovsSesion] = useState([]);
   const [verDetalleModal, setVerDetalleModal] = useState(null);
 
-  // Formularios
+  // Formularios Admin / Movimientos
   const [movTipo, setMovTipo] = useState('salida');
   const [movConcepto, setMovConcepto] = useState('');
   const [movMonto, setMovMonto] = useState('');
@@ -35,21 +38,25 @@ function App() {
   const [nuevaCat, setNuevaCat] = useState('bebida');
   const [nuevoProvNombre, setNuevoProvNombre] = useState('');
 
+  // Formularios Puerta
+  const [precioEntrada, setPrecioEntrada] = useState(5000);
+  const [cantEntradas, setCantEntradas] = useState(1);
+  const [pagoEntrada, setPagoEntrada] = useState('efectivo');
+  const [nombreLista, setNombreLista] = useState('');
+  const [cantLista, setCantLista] = useState(1);
+
   const cargarDatos = async () => {
-    // 1. Bebidas y Proveedores
     const { data: prods } = await supabase.from('bebidas').select('*').order('id');
     if (prods) setBebidas(prods);
 
     const { data: provs } = await supabase.from('proveedores').select('*').order('id');
     if (provs) setProveedores(provs);
 
-    // 2. Historial si es admin
     if (user?.rol === 'admin') {
       const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false });
       if (hist) setHistorial(hist);
     }
 
-    // 3. Caja Activa
     const { data: sesionData } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
     const sesion = sesionData && sesionData.length > 0 ? sesionData[0] : null;
     
@@ -57,12 +64,12 @@ function App() {
       setSesionActiva(sesion);
       const { data: v } = await supabase.from('ventas').select('*').eq('sesion_id', sesion.id);
       const { data: m } = await supabase.from('movimientos').select('*').eq('sesion_id', sesion.id);
+      const { data: p } = await supabase.from('puerta').select('*').eq('sesion_id', sesion.id);
       setVentasSesion(v || []);
       setMovsSesion(m || []);
+      setPuertaSesion(p || []);
     } else {
-      setSesionActiva(null);
-      setVentasSesion([]);
-      setMovsSesion([]);
+      setSesionActiva(null); setVentasSesion([]); setMovsSesion([]); setPuertaSesion([]);
     }
   };
 
@@ -70,18 +77,28 @@ function App() {
     if (user) cargarDatos();
   }, [user, vista]);
 
-  // Cálculos Financieros
+  // CÁLCULOS FINANCIEROS Y DE PUERTA
   const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
+  const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + (c.cantidad * c.costo), 0) - (p.descuento || 0)), 0);
+
   const totalEfecVentas = ventasSesion.filter(v => v.metodo_pago === 'efectivo').reduce((acc, curr) => acc + Number(curr.total), 0);
   const totalTransfVentas = ventasSesion.filter(v => v.metodo_pago === 'transferencia').reduce((acc, curr) => acc + Number(curr.total), 0);
+  
+  const totalEfecPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'efectivo').reduce((acc, curr) => acc + Number(curr.total), 0);
+  const totalTransfPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'transferencia').reduce((acc, curr) => acc + Number(curr.total), 0);
+
   const entradasExtraEfec = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'efectivo').reduce((acc, curr) => acc + Number(curr.monto), 0);
   const entradasExtraTransf = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'transferencia').reduce((acc, curr) => acc + Number(curr.monto), 0);
   const salidasEfec = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'efectivo').reduce((acc, curr) => acc + Number(curr.monto), 0);
   const salidasTransf = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'transferencia').reduce((acc, curr) => acc + Number(curr.monto), 0);
 
-  const CAJA_FISICA = totalEfecVentas + entradasExtraEfec - salidasEfec;
-  const CAJA_BANCO = totalTransfVentas + entradasExtraTransf - salidasTransf;
+  const CAJA_FISICA = totalEfecVentas + totalEfecPuerta + entradasExtraEfec - salidasEfec;
+  const CAJA_BANCO = totalTransfVentas + totalTransfPuerta + entradasExtraTransf - salidasTransf;
   const TOTAL_NETO = CAJA_FISICA + CAJA_BANCO;
+
+  const personasVendidas = puertaSesion.filter(p => p.tipo === 'venta').reduce((acc, curr) => acc + curr.cantidad, 0);
+  const personasLista = puertaSesion.filter(p => p.tipo === 'lista').reduce((acc, curr) => acc + curr.cantidad, 0);
+  const totalPersonas = personasVendidas + personasLista;
 
   /* ----- AUTH & APERTURA ----- */
   const handleLogin = async (e) => {
@@ -90,11 +107,7 @@ function App() {
     const { data, error } = await supabase.from('cajeros').select('*').eq('usuario', username.value).eq('password', password.value).single();
     setLoading(false);
     if (error || !data) alert('❌ Usuario incorrecto.');
-    else {
-      setUser(data);
-      await cargarDatos();
-      if (data.rol === 'admin') setVista('admin'); else setVista('pos');
-    }
+    else { setUser(data); await cargarDatos(); if (data.rol === 'admin') setVista('admin'); else setVista('pos'); }
   };
 
   const abrirCaja = async (e) => {
@@ -102,36 +115,46 @@ function App() {
     if (!nombreFiestaApertura) return;
     setLoading(true);
     await supabase.from('sesiones').insert([{ nombre_fiesta: nombreFiestaApertura, abierta_por: user.usuario }]);
-    await cargarDatos();
-    setLoading(false);
-    setVista('pos');
+    await cargarDatos(); setLoading(false); setVista('pos');
   };
 
-  /* ----- VENTAS Y CARRITO ----- */
+  /* ----- MÓDULO PUERTA ----- */
+  const venderEntradas = async (e) => {
+    e.preventDefault();
+    if (!sesionActiva || cantEntradas < 1) return;
+    setLoading(true);
+    const total = cantEntradas * precioEntrada;
+    await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'venta', cantidad: cantEntradas, precio_unitario: precioEntrada, total: total, metodo_pago: pagoEntrada }]);
+    setCantEntradas(1); await cargarDatos(); setLoading(false);
+  };
+
+  const registrarLista = async (e) => {
+    e.preventDefault();
+    if (!sesionActiva || !nombreLista || cantLista < 1) return;
+    setLoading(true);
+    await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: nombreLista, cantidad: cantLista, precio_unitario: 0, total: 0 }]);
+    setNombreLista(''); setCantLista(1); await cargarDatos(); setLoading(false);
+  };
+
+  /* ----- MÓDULO VENTAS (BARRA) ----- */
   const agregarAlCarrito = (producto) => {
     if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock disponible');
-    setCarrito(prevCarrito => {
-      const existe = prevCarrito.find(item => item.id === producto.id);
+    setCarrito(prev => {
+      const existe = prev.find(item => item.id === producto.id);
       if (existe) {
-        if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock en barra'); return prevCarrito; }
-        return prevCarrito.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item);
-      } else return [...prevCarrito, { ...producto, cantidad: 1 }];
+        if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; }
+        return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item);
+      } else return [...prev, { ...producto, cantidad: 1 }];
     });
   };
 
-  const cambiarCantidad = (id, delta) => {
-    setCarrito(prevCarrito => prevCarrito.map(item => {
-      if (item.id === id) { const nuevaCant = item.cantidad + delta; return nuevaCant > 0 ? { ...item, cantidad: nuevaCant } : null; }
-      return item;
-    }).filter(Boolean));
-  };
+  const cambiarCantidad = (id, delta) => setCarrito(prev => prev.map(i => i.id === id ? (i.cantidad + delta > 0 ? { ...i, cantidad: i.cantidad + delta } : null) : i).filter(Boolean));
 
   const procesarVenta = async () => {
     if (carrito.length === 0 || !sesionActiva) return;
     setLoading(true);
     const totalVenta = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
     const { data: ventaData, error } = await supabase.from('ventas').insert([{ cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id }]).select().single();
-    
     if (!error) {
       for (const item of carrito) await supabase.from('bebidas').update({ stock: item.stock - item.cantidad }).eq('id', item.id);
       setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS });
@@ -141,127 +164,82 @@ function App() {
   };
 
   /* ----- MÓDULO PROVEEDORES ----- */
-  const crearProveedor = async (e) => {
-    e.preventDefault();
-    if (!nuevoProvNombre) return;
-    setLoading(true);
-    await supabase.from('proveedores').insert([{ nombre: nuevoProvNombre }]);
-    setNuevoProvNombre(''); await cargarDatos(); setLoading(false);
-  };
-
-  const eliminarProveedor = async (id, nombre) => {
-    if (window.confirm(`⚠️ PELIGRO: ¿Eliminar al proveedor "${nombre}" y su historial de deudas?`)) {
-      setLoading(true); await supabase.from('proveedores').delete().eq('id', id); await cargarDatos(); setLoading(false);
-    }
-  };
-
+  const crearProveedor = async (e) => { e.preventDefault(); if (!nuevoProvNombre) return; setLoading(true); await supabase.from('proveedores').insert([{ nombre: nuevoProvNombre }]); setNuevoProvNombre(''); await cargarDatos(); setLoading(false); };
+  const eliminarProveedor = async (id, nombre) => { if (window.confirm(`¿Eliminar al proveedor "${nombre}"?`)) { setLoading(true); await supabase.from('proveedores').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
   const agregarCompraProv = async (id, comprasActuales) => {
-    const prod = prompt('Carga el nombre de la bebida o producto recibido:');
-    if (!prod) return;
-    const cant = prompt(`Cantidad ingresada de ${prod}:`);
-    if (!cant || isNaN(cant)) return;
-    const costo = prompt(`Precio de COSTO UNITARIO al que te lo vende: $`);
-    if (!costo || isNaN(costo)) return;
-
-    const nuevaCompra = { id: Date.now(), producto: prod, cantidad: Number(cant), costo: Number(costo) };
-    const nuevasCompras = [...(comprasActuales || []), nuevaCompra];
-    await supabase.from('proveedores').update({ compras: nuevasCompras }).eq('id', id);
-    cargarDatos();
+    const prod = prompt('Nombre de la bebida recibida:'); if (!prod) return;
+    const cant = prompt(`Cantidad ingresada de ${prod}:`); if (!cant || isNaN(cant)) return;
+    const costo = prompt(`Precio de COSTO UNITARIO: $`); if (!costo || isNaN(costo)) return;
+    await supabase.from('proveedores').update({ compras: [...(comprasActuales || []), { id: Date.now(), producto: prod, cantidad: Number(cant), costo: Number(costo) }] }).eq('id', id); cargarDatos();
   };
+  const aplicarDescuentoProv = async (id, descActual) => { const desc = prompt('Ingresar descuento a favor ($):', descActual || 0); if (desc !== null && !isNaN(desc)) { await supabase.from('proveedores').update({ descuento: Number(desc) }).eq('id', id); cargarDatos(); } };
+  
+  // PAGO SINCRONIZADO A PROVEEDOR
+  const pagarDeudaProveedor = async (prov, totalDeuda) => {
+    if (!sesionActiva) return alert('⚠️ Tienes que ABRIR CAJA primero para poder sacar plata y pagarle.');
+    if (totalDeuda <= 0) return alert('Este proveedor no tiene deuda pendiente.');
+    
+    const metodo = prompt(`¿Con qué vas a pagar los $${totalDeuda} de ${prov.nombre}?\nEscribe "efectivo" o "transferencia"`, "efectivo");
+    if (metodo !== 'efectivo' && metodo !== 'transferencia') return alert('Operación cancelada. Debes escribir "efectivo" o "transferencia".');
 
-  const eliminarCompraProv = async (provId, comprasActuales, compraId) => {
-    if (!window.confirm('¿Borrar este ítem de la factura del proveedor? (Ideal usar al pagarle)')) return;
-    const nuevasCompras = comprasActuales.filter(c => c.id !== compraId);
-    await supabase.from('proveedores').update({ compras: nuevasCompras }).eq('id', provId);
-    cargarDatos();
-  };
-
-  const aplicarDescuentoProv = async (id, descActual) => {
-    const desc = prompt('Ingresar descuento a favor en dinero ($):', descActual || 0);
-    if (desc !== null && !isNaN(desc)) {
-      await supabase.from('proveedores').update({ descuento: Number(desc) }).eq('id', id);
-      cargarDatos();
+    if (window.confirm(`¿Confirmas el pago de $${totalDeuda} a ${prov.nombre} en ${metodo.toUpperCase()} con plata de la CAJA ACTUAL?`)) {
+      setLoading(true);
+      await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: 'salida', concepto: `Pago a Proveedor: ${prov.nombre}`, monto: totalDeuda, metodo_pago: metodo, sesion_id: sesionActiva.id }]);
+      await supabase.from('proveedores').update({ compras: [], descuento: 0 }).eq('id', prov.id);
+      await cargarDatos(); setLoading(false); alert('✅ Pago registrado. La plata se descontó de tu caja y la deuda volvió a $0.');
     }
   };
 
-  /* ----- PANEL ADMIN ----- */
-  const crearProducto = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    await supabase.from('bebidas').insert([{ nombre: nuevoNombre, precio: Number(nuevoPrecio), stock: Number(nuevoStock), categoria: nuevaCat }]);
-    setNuevoNombre(''); setNuevoPrecio(''); setNuevoStock(''); cargarDatos(); setLoading(false);
-  };
-
-  const eliminarProducto = async (id, nombre) => {
-    if (window.confirm(`⚠️ PELIGRO: ¿Eliminar "${nombre}" del menú?`)) {
-      setLoading(true); await supabase.from('bebidas').delete().eq('id', id); await cargarDatos(); setLoading(false);
-    }
-  };
-
-  const registrarMovimiento = async (e) => {
-    e.preventDefault();
-    if (!movConcepto || !movMonto || !sesionActiva) return;
-    setLoading(true);
-    await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: movTipo, concepto: movConcepto, monto: Number(movMonto), metodo_pago: movMetodo, sesion_id: sesionActiva.id }]);
-    setMovConcepto(''); setMovMonto(''); cargarDatos(); setLoading(false);
-  };
-
+  /* ----- MÓDULO ADMIN Y CIERRE ----- */
+  const crearProducto = async (e) => { e.preventDefault(); setLoading(true); await supabase.from('bebidas').insert([{ nombre: nuevoNombre, precio: Number(nuevoPrecio), stock: Number(nuevoStock), categoria: nuevaCat }]); setNuevoNombre(''); setNuevoPrecio(''); setNuevoStock(''); cargarDatos(); setLoading(false); };
+  const eliminarProducto = async (id, nombre) => { if (window.confirm(`¿Eliminar "${nombre}" del menú?`)) { setLoading(true); await supabase.from('bebidas').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
+  const registrarMovimiento = async (e) => { e.preventDefault(); if (!movConcepto || !movMonto || !sesionActiva) return; setLoading(true); await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: movTipo, concepto: movConcepto, monto: Number(movMonto), metodo_pago: movMetodo, sesion_id: sesionActiva.id }]); setMovConcepto(''); setMovMonto(''); cargarDatos(); setLoading(false); };
+  
   const procesarCierre = async () => {
     if (!window.confirm('⚠️ ¿Estás seguro de CERRAR CAJA definitivamente y volver a cero?')) return;
     setLoading(true);
-
-    let conteoProductos = {};
-    ventasSesion.forEach(v => {
-      v.detalles.forEach(item => {
-        if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0;
-        conteoProductos[item.nombre] += item.cantidad;
-      });
-    });
-
+    let conteoProductos = {}; ventasSesion.forEach(v => { v.detalles.forEach(item => { if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0; conteoProductos[item.nombre] += item.cantidad; }); });
     const resumenCierre = {
-      estado: 'cerrada',
-      cerrada_por: user.usuario,
-      fecha_cierre: new Date().toISOString(),
-      recaudacion_efectivo: CAJA_FISICA,
-      recaudacion_transf: CAJA_BANCO,
-      total_salidas: salidasEfec + salidasTransf,
-      total_ingresos: entradasExtraEfec + entradasExtraTransf,
-      ranking_ventas: conteoProductos
+      estado: 'cerrada', cerrada_por: user.usuario, fecha_cierre: new Date().toISOString(),
+      recaudacion_efectivo: CAJA_FISICA, recaudacion_transf: CAJA_BANCO,
+      total_salidas: salidasEfec + salidasTransf, total_ingresos: entradasExtraEfec + entradasExtraTransf,
+      ranking_ventas: conteoProductos,
+      personas_vendidas: personasVendidas, personas_lista: personasLista
     };
-
     await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id);
     
     setTicketActual({
-      tipo: 'cierre',
-      fiesta: sesionActiva.nombre_fiesta,
-      fecha: new Date().toLocaleDateString(),
-      hora: new Date().toLocaleTimeString(),
-      responsable: user.usuario,
-      ventas_efectivo: totalEfecVentas,
-      ventas_transf: totalTransfVentas,
-      salidas_efec: salidasEfec,
-      salidas_transf: salidasTransf,
-      entradas_efec: entradasExtraEfec,
-      entradas_transf: entradasExtraTransf,
-      tickets_totales: ventasSesion.length,
-      ...resumenCierre
+      tipo: 'cierre', fiesta: sesionActiva.nombre_fiesta, fecha: new Date().toLocaleDateString(), hora: new Date().toLocaleTimeString(), responsable: user.usuario,
+      ventas_efectivo: totalEfecVentas, ventas_transf: totalTransfVentas, puerta_efectivo: totalEfecPuerta, puerta_transf: totalTransfPuerta,
+      salidas_efec: salidasEfec, salidas_transf: salidasTransf, entradas_efec: entradasExtraEfec, entradas_transf: entradasExtraTransf,
+      personas_vendidas: personasVendidas, personas_lista: personasLista, ...resumenCierre
     });
-
-    setSesionActiva(null);
-    setVista('admin');
-    setLoading(false);
+    setSesionActiva(null); setVista('admin'); setLoading(false);
   };
 
-  // ----- RENDERIZADO PRINCIPAL -----
+  /* ----- COMPONENTES COMUNES ----- */
+  const barraHeader = (
+    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3">
+      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
+        <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
+        {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
+        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
+        {sesionActiva && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 Puerta</button>}
+        {sesionActiva && vista !== 'pos' && <button onClick={() => setVista('pos')} className="bg-green-600 hover:bg-green-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🍹 Barra</button>}
+        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
+      </div>
+    </header>
+  );
 
+  // LOGICA DE RENDERIZADO
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
         <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-black text-purple-500 tracking-widest">GJBROSS</h1>
-            <p className="text-white tracking-widest text-sm mt-1">SISTEMA POS</p>
-          </div>
+          <div className="text-center mb-8"><h1 className="text-4xl font-black text-purple-500 tracking-widest">GJBROSS</h1><p className="text-white tracking-widest text-sm mt-1">SISTEMA POS</p></div>
           <form onSubmit={handleLogin} className="space-y-6">
             <input type="text" id="username" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="Usuario" required />
             <input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="********" required />
@@ -272,6 +250,7 @@ function App() {
     );
   }
 
+  // TICKET DE CIERRE O VENTA
   if (ticketActual) {
     return (
       <div className="min-h-screen bg-black text-white p-6 flex flex-col items-center justify-center">
@@ -283,40 +262,33 @@ function App() {
             <>
               <div className="text-left text-xs mb-2 mt-4"><p><b>Ticket:</b> #{ticketActual.id}</p><p><b>Cajero:</b> {ticketActual.cajero}</p><p><b>Hora:</b> {ticketActual.fecha}</p></div>
               <hr className="my-2 border-dashed border-gray-400" />
-              <div className="text-left space-y-1">
-                {ticketActual.items.map((it) => (<div key={it.id} className="flex justify-between text-sm"><span>{it.cantidad}x {it.nombre}</span><span>${it.precio * it.cantidad}</span></div>))}
-              </div>
+              <div className="text-left space-y-1">{ticketActual.items.map((it) => (<div key={it.id} className="flex justify-between text-sm"><span>{it.cantidad}x {it.nombre}</span><span>${it.precio * it.cantidad}</span></div>))}</div>
               <hr className="my-2 border-dashed border-gray-400" />
               <h3 className="text-2xl font-black text-right">TOTAL: ${ticketActual.total}</h3>
               <p className="text-xs text-center mt-2 font-bold bg-black text-white py-1 uppercase border border-dashed">METODO: {ticketActual.metodo_pago}</p>
             </>
           ) : (
             <>
-              <div className="text-left text-xs space-y-1 mt-4 mb-2">
-                <p><b>Impresión:</b> {ticketActual.fecha} - {ticketActual.hora}</p>
-                <p><b>Cierre Por:</b> {ticketActual.responsable}</p>
-                <p><b>Tickets Emitidos:</b> {ticketActual.tickets_totales}</p>
+              <div className="text-left text-xs space-y-1 mt-4 mb-2"><p><b>Cierre:</b> {ticketActual.fecha} - {ticketActual.hora}</p><p><b>Resp:</b> {ticketActual.responsable}</p></div>
+              <hr className="border-black my-2" />
+              <h4 className="font-bold text-xs text-left uppercase mb-1">Métricas de Puerta</h4>
+              <div className="text-left text-xs space-y-1 bg-gray-100 p-2 border border-dashed">
+                <div className="flex justify-between"><span>Entradas Vendidas:</span><span className="font-bold">{ticketActual.personas_vendidas} pers.</span></div>
+                <div className="flex justify-between"><span>Listas Gratis / VIP:</span><span className="font-bold">{ticketActual.personas_lista} pers.</span></div>
+                <div className="flex justify-between text-sm font-black mt-1"><span>TOTAL INGRESOS:</span><span>{ticketActual.personas_vendidas + ticketActual.personas_lista} pers.</span></div>
               </div>
-              <hr className="my-2 border-black" />
-              <h4 className="font-bold text-xs text-left uppercase">Detalle Efectivo</h4>
+              <hr className="border-black my-2" />
               <div className="text-left text-xs space-y-1">
-                <div className="flex justify-between"><span>Ventas Efectivo:</span><span>${ticketActual.ventas_efectivo}</span></div>
-                <div className="flex justify-between"><span>Entradas Extra:</span><span>+${ticketActual.entradas_efec}</span></div>
-                <div className="flex justify-between text-red-600"><span>Salidas/Gastos:</span><span>-${ticketActual.salidas_efec}</span></div>
-                <div className="flex justify-between font-bold text-sm bg-gray-200 mt-1"><span>TOTAL CAJÓN:</span><span>${ticketActual.recaudacion_efectivo}</span></div>
-              </div>
-              <hr className="my-3 border-black border-dashed" />
-              <h4 className="font-bold text-xs text-left uppercase">Detalle Banco/Transf</h4>
-              <div className="text-left text-xs space-y-1">
-                <div className="flex justify-between"><span>Ventas Transf:</span><span>${ticketActual.ventas_transf}</span></div>
-                <div className="flex justify-between"><span>Entradas Extra:</span><span>+${ticketActual.entradas_transf}</span></div>
-                <div className="flex justify-between text-red-600"><span>Salidas/Gastos:</span><span>-${ticketActual.salidas_transf}</span></div>
-                <div className="flex justify-between font-bold text-sm bg-gray-200 mt-1"><span>TOTAL BANCO:</span><span>${ticketActual.recaudacion_transf}</span></div>
+                <div className="flex justify-between font-bold"><span>Total Ventas (Barra + Puerta):</span><span>${ticketActual.ventas_efectivo + ticketActual.ventas_transf + ticketActual.puerta_efectivo + ticketActual.puerta_transf}</span></div>
+                <div className="flex justify-between text-green-600"><span>Entradas de plata extra:</span><span>+${ticketActual.entradas_efec + ticketActual.entradas_transf}</span></div>
+                <div className="flex justify-between text-red-600"><span>Pagos/Salidas de caja:</span><span>-${ticketActual.salidas_efec + ticketActual.salidas_transf}</span></div>
               </div>
               <hr className="my-3 border-black" />
-              <div className="bg-black text-white p-2">
-                <h3 className="text-sm font-bold text-right uppercase">Recaudación Neta</h3>
-                <h2 className="text-2xl font-black text-right">${ticketActual.recaudacion_efectivo + ticketActual.recaudacion_transf}</h2>
+              <div className="bg-black text-white p-2 text-left text-sm space-y-1">
+                <div className="flex justify-between text-gray-300"><span>A Rendir EFECTIVO:</span><span>${ticketActual.recaudacion_efectivo}</span></div>
+                <div className="flex justify-between text-gray-300"><span>A Rendir BANCO/MP:</span><span>${ticketActual.recaudacion_transf}</span></div>
+                <hr className="border-gray-500 my-1"/>
+                <div className="flex justify-between"><span className="font-bold uppercase">Recaudación Neta:</span><span className="text-xl font-black">${ticketActual.recaudacion_efectivo + ticketActual.recaudacion_transf}</span></div>
               </div>
             </>
           )}
@@ -329,88 +301,152 @@ function App() {
     );
   }
 
-  const barraHeader = (
-    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3">
-      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
-        <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
-        {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
-      </div>
-      <div className="flex space-x-2 w-full md:w-auto justify-center">
-        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">🚚 Provs</button>}
-        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">⚙️ Admin</button>}
-        {user.rol === 'admin' && vista !== 'pos' && sesionActiva && <button onClick={() => setVista('pos')} className="bg-green-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">➡️ Ventas</button>}
-        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
-      </div>
-    </header>
-  );
+  // VISTA: PUERTA (TAQUILLA Y LISTAS)
+  if (vista === 'puerta') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
+        {barraHeader}
+        <div className="max-w-6xl mx-auto">
+          {/* Dashboard Puerta */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="bg-green-900/30 p-4 rounded-xl border border-green-800 text-center">
+              <p className="text-gray-400 text-xs font-bold uppercase mb-1">Entradas Vendidas (Plata)</p>
+              <p className="text-3xl font-black text-green-400">{personasVendidas} <span className="text-sm">pers.</span></p>
+              <p className="text-xs text-gray-400 mt-1">Recaudado: ${totalEfecPuerta + totalTransfPuerta}</p>
+            </div>
+            <div className="bg-yellow-900/30 p-4 rounded-xl border border-yellow-800 text-center">
+              <p className="text-gray-400 text-xs font-bold uppercase mb-1">Listas / VIP (Gratis)</p>
+              <p className="text-3xl font-black text-yellow-400">{personasLista} <span className="text-sm">pers.</span></p>
+            </div>
+            <div className="bg-purple-900/30 p-4 rounded-xl border border-purple-800 text-center">
+              <p className="text-gray-400 text-xs font-bold uppercase mb-1">Total Ingresos (Gente)</p>
+              <p className="text-4xl font-black text-purple-400">{totalPersonas}</p>
+            </div>
+          </div>
 
-  // VISTA: GESTIÓN DE PROVEEDORES
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Vender Entradas */}
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+              <h2 className="text-xl font-black uppercase text-green-400 mb-4 flex items-center gap-2">🎟️ Venta de Entradas</h2>
+              <form onSubmit={venderEntradas} className="space-y-4">
+                <div className="flex gap-2">
+                  <div className="w-1/2">
+                    <label className="text-xs text-gray-400 font-bold uppercase">Precio Unitario ($)</label>
+                    <input type="number" className="w-full bg-gray-700 p-3 rounded-lg font-bold mt-1" value={precioEntrada} onChange={e => setPrecioEntrada(e.target.value)} required />
+                  </div>
+                  <div className="w-1/2">
+                    <label className="text-xs text-gray-400 font-bold uppercase">Cant. Personas</label>
+                    <div className="flex items-center mt-1">
+                      <button type="button" onClick={() => setCantEntradas(Math.max(1, cantEntradas - 1))} className="bg-gray-600 px-4 py-3 rounded-l-lg font-black">-</button>
+                      <input type="number" className="w-full bg-gray-700 p-3 text-center font-bold" value={cantEntradas} readOnly />
+                      <button type="button" onClick={() => setCantEntradas(cantEntradas + 1)} className="bg-gray-600 px-4 py-3 rounded-r-lg font-black">+</button>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gray-900 p-3 rounded-lg flex justify-between items-center border border-gray-700">
+                  <span className="text-sm font-bold text-gray-400">Total a Cobrar:</span>
+                  <span className="text-2xl font-black text-white">${cantEntradas * precioEntrada}</span>
+                </div>
+                <div className="flex space-x-2">
+                  <button type="button" onClick={() => setPagoEntrada('efectivo')} className={`flex-1 py-3 rounded-lg font-black text-xs uppercase transition ${pagoEntrada === 'efectivo' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>💵 Efectivo</button>
+                  <button type="button" onClick={() => setPagoEntrada('transferencia')} className={`flex-1 py-3 rounded-lg font-black text-xs uppercase transition ${pagoEntrada === 'transferencia' ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📱 Transf</button>
+                </div>
+                <button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-lg uppercase mt-2 shadow">Registrar Venta Puerta</button>
+              </form>
+            </div>
+
+            {/* Listas Gratis */}
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+              <h2 className="text-xl font-black uppercase text-yellow-400 mb-4 flex items-center gap-2">📝 Listas / Free Pass</h2>
+              <form onSubmit={registrarLista} className="space-y-4">
+                <div>
+                  <label className="text-xs text-gray-400 font-bold uppercase">Nombre en Lista (Ej: Gabriel)</label>
+                  <input type="text" className="w-full bg-gray-700 p-3 rounded-lg font-bold mt-1" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Cumpleaños Matias" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 font-bold uppercase">Cantidad de Personas que entran</label>
+                  <div className="flex items-center mt-1">
+                    <button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 px-4 py-3 rounded-l-lg font-black">-</button>
+                    <input type="number" className="w-full bg-gray-700 p-3 text-center font-bold text-yellow-400 text-xl" value={cantLista} readOnly />
+                    <button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 px-4 py-3 rounded-r-lg font-black">+</button>
+                  </div>
+                </div>
+                <button type="submit" disabled={loading} className="w-full bg-yellow-600 hover:bg-yellow-500 text-black py-4 rounded-xl font-black text-lg uppercase mt-4 shadow">Dejar Pasar (Gratis)</button>
+              </form>
+
+              {/* Mini historial de listas */}
+              <div className="mt-6 max-h-[150px] overflow-y-auto custom-scrollbar border-t border-gray-700 pt-4 space-y-2">
+                {puertaSesion.filter(p => p.tipo === 'lista').length === 0 ? <p className="text-xs text-gray-500 text-center">Nadie ha entrado por lista aún.</p> : 
+                  puertaSesion.filter(p => p.tipo === 'lista').reverse().map(l => (
+                    <div key={l.id} className="flex justify-between items-center bg-gray-700/50 p-2 rounded text-sm">
+                      <span className="font-bold text-gray-300">{l.nombre}</span>
+                      <span className="font-black text-yellow-400">+{l.cantidad} pers.</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // VISTA: PROVEEDORES
   if (vista === 'proveedores') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
         {barraHeader}
         <div className="max-w-6xl mx-auto mt-6">
-          
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
             <div>
               <h2 className="text-2xl font-black uppercase text-orange-400">🚚 Proveedores y Deudas</h2>
-              <p className="text-sm text-gray-400">Registra recibos de mercadería, aplica descuentos y controla lo que debes pagar.</p>
+              <p className="text-sm text-gray-400">Registra recibos, paga desde la caja y controla deudas.</p>
             </div>
             <form onSubmit={crearProveedor} className="flex w-full md:w-auto">
               <input type="text" placeholder="Nombre (Ej: Quilmes)" className="w-full bg-gray-700 p-3 rounded-l-lg focus:outline-none" value={nuevoProvNombre} onChange={e => setNuevoProvNombre(e.target.value)} required />
               <button type="submit" disabled={loading} className="bg-orange-600 hover:bg-orange-500 px-6 font-bold rounded-r-lg">Añadir</button>
             </form>
           </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {proveedores.map(p => {
               const subtotal = (p.compras || []).reduce((acc, c) => acc + (c.cantidad * c.costo), 0);
               const totalPagar = subtotal - (p.descuento || 0);
-
               return (
                 <div key={p.id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl relative flex flex-col">
                   <button onClick={() => eliminarProveedor(p.id, p.nombre)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-xl transition">❌</button>
                   <h3 className="text-xl font-black text-white uppercase mb-4 pr-8 border-b border-gray-700 pb-2">{p.nombre}</h3>
-                  
-                  <div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[250px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">
-                    {(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4">Cero stock registrado.</p> : 
+                  <div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[200px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">
+                    {(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4">Sin deudas.</p> : 
                       p.compras.map(c => (
                         <div key={c.id} className="flex justify-between items-center bg-gray-800 p-2 rounded text-sm shadow">
-                          <div className="flex-1 pr-2">
-                            <p className="font-bold text-white line-clamp-1">{c.producto}</p>
-                            <p className="text-[10px] text-gray-400">{c.cantidad} unidades a ${c.costo} c/u</p>
-                          </div>
-                          <div className="flex items-center space-x-3">
-                            <span className="font-black text-green-400">${c.cantidad * c.costo}</span>
-                            <button onClick={() => eliminarCompraProv(p.id, p.compras, c.id)} className="text-red-500 hover:text-red-400 text-lg">🗑️</button>
-                          </div>
+                          <div className="flex-1 pr-2"><p className="font-bold text-white line-clamp-1">{c.producto}</p><p className="text-[10px] text-gray-400">{c.cantidad}x a ${c.costo}</p></div>
+                          <span className="font-black text-green-400">${c.cantidad * c.costo}</span>
                         </div>
                       ))
                     }
                   </div>
-
-                  <div className="space-y-1 mb-4 bg-gray-900 p-3 rounded-lg">
-                    <div className="flex justify-between text-xs text-gray-400"><span>Subtotal bruto:</span><span>${subtotal}</span></div>
-                    <div className="flex justify-between text-xs text-yellow-400"><span>Descuento aplicado:</span><span>-${p.descuento || 0}</span></div>
+                  <div className="space-y-1 mb-3 bg-gray-900 p-3 rounded-lg">
+                    <div className="flex justify-between text-xs text-gray-400"><span>Subtotal:</span><span>${subtotal}</span></div>
+                    <div className="flex justify-between text-xs text-yellow-400"><span>Descuento:</span><span>-${p.descuento || 0}</span></div>
                     <hr className="border-gray-700 my-2"/>
-                    <div className="flex justify-between text-lg font-black text-white"><span>TOTAL A PAGAR:</span><span className="text-orange-400">${totalPagar}</span></div>
+                    <div className="flex justify-between text-lg font-black text-white"><span>DEUDA:</span><span className="text-orange-400">${totalPagar}</span></div>
                   </div>
-
-                  <div className="flex space-x-2">
-                    <button onClick={() => agregarCompraProv(p.id, p.compras)} className="flex-1 bg-green-600 hover:bg-green-500 py-3 rounded-lg font-bold text-[10px] lg:text-xs uppercase shadow">+ Compra</button>
-                    <button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-lg font-bold text-[10px] lg:text-xs uppercase shadow">🎁 Descuento</button>
+                  <div className="flex space-x-2 mb-3">
+                    <button onClick={() => agregarCompraProv(p.id, p.compras)} className="flex-1 bg-gray-600 hover:bg-gray-500 py-2 rounded-lg font-bold text-[10px] uppercase shadow">+ Compra</button>
+                    <button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-2 rounded-lg font-bold text-[10px] uppercase shadow">🎁 Desc.</button>
                   </div>
+                  <button onClick={() => pagarDeudaProveedor(p, totalPagar)} className="w-full bg-red-600 hover:bg-red-500 py-3 rounded-lg font-black text-xs uppercase shadow-[0_0_10px_rgba(220,38,38,0.4)]">💸 Pagar con Plata de Caja</button>
                 </div>
               );
             })}
           </div>
-
         </div>
       </div>
     );
   }
 
-  // VISTA: ADMIN DASHBOARD (Apertura + Historial cuando caja está cerrada)
+  // VISTA: ADMIN DASHBOARD
   if (vista === 'admin') {
     if (!sesionActiva) {
       return (
@@ -427,25 +463,17 @@ function App() {
                 </form>
               </div>
             </div>
-
             <div className="lg:col-span-2">
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]">
                 <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2>
                 <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                  {historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres registrados aún.</p> :
+                  {historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> :
                     historial.map(h => (
                       <div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition">
                         <div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}>
-                          <div>
-                            <h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3>
-                            <p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 Cerrado por: {h.cerrada_por}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p>
-                            <p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p>
-                          </div>
+                          <div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div>
+                          <div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div>
                         </div>
-                        
                         {sesionExpandida === h.id && (
                           <div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
@@ -454,17 +482,15 @@ function App() {
                                 <div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div>
                                 <div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div>
                                 <hr className="border-gray-600 my-1" />
-                                <div className="flex justify-between"><span>Ingresos Extra:</span><span className="font-bold text-green-400">+${h.total_ingresos || 0}</span></div>
-                                <div className="flex justify-between"><span>Gastos/Salidas:</span><span className="font-bold text-red-400">-${h.total_salidas || 0}</span></div>
+                                <div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div>
+                                <div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div>
                               </div>
                             </div>
                             <div>
                               <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas Vendidas</h4>
                               <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
                                 {h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (
-                                  Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (
-                                    <div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>
-                                  ))
+                                  Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))
                                 ) : <span className="text-gray-500 text-xs">Sin datos.</span>}
                               </div>
                             </div>
@@ -485,65 +511,29 @@ function App() {
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
         
-        {verDetalleModal && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col">
-              <h2 className="text-xl font-black uppercase mb-4 text-purple-400 border-b border-gray-700 pb-2">
-                {verDetalleModal === 'entrada' ? 'Ingresos Extra' : verDetalleModal === 'salida' ? 'Salidas y Gastos' : verDetalleModal === 'ventas_efectivo' ? 'Ventas en Efectivo' : 'Ventas por Transferencia'}
-              </h2>
-              <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                {(() => {
-                  let datos = []; let esVenta = false;
-                  if (verDetalleModal === 'entrada') datos = movsSesion.filter(m => m.tipo === 'entrada');
-                  else if (verDetalleModal === 'salida') datos = movsSesion.filter(m => m.tipo === 'salida');
-                  else if (verDetalleModal === 'ventas_efectivo') { datos = ventasSesion.filter(v => v.metodo_pago === 'efectivo'); esVenta = true; }
-                  else if (verDetalleModal === 'ventas_transferencia') { datos = ventasSesion.filter(v => v.metodo_pago === 'transferencia'); esVenta = true; }
-
-                  if (datos.length === 0) return <p className="text-gray-500 text-center py-4">No hay registros.</p>;
-                  return datos.map(d => (
-                    <div key={d.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center text-sm border border-gray-600">
-                      <div className="flex-1 pr-2">
-                        {esVenta ? (
-                          <><p className="font-bold text-xs text-gray-300">Ticket #{d.id} - Cajero: {d.cajero}</p><p className="text-xs text-gray-400 italic line-clamp-1">{d.detalles.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p></>
-                        ) : (
-                          <><p className="font-bold text-sm text-white">{d.concepto}</p><p className="text-xs text-gray-400 uppercase">Vía: {d.metodo_pago}</p></>
-                        )}
-                      </div>
-                      <span className={`font-black text-lg ${verDetalleModal === 'salida' ? 'text-red-400' : 'text-green-400'}`}>${esVenta ? d.total : d.monto}</span>
-                    </div>
-                  ));
-                })()}
-              </div>
-              <button onClick={() => setVerDetalleModal(null)} className="mt-6 bg-gray-600 hover:bg-gray-500 py-3 rounded-lg font-bold w-full uppercase">Cerrar Detalle</button>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg">
             <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2>
             <p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p>
           </div>
-          <div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group">
-            <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2>
+          <div className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center shadow-lg">
+            <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Caja (Físico)</h2>
             <p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p>
-            <p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets efectivo</p>
           </div>
-          <div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group">
-            <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2>
+          <div className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center shadow-lg">
+            <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Banco / MP (Digital)</h2>
             <p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p>
-            <p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets transf</p>
           </div>
-          <div className="space-y-4">
-            <div onClick={() => setVerDetalleModal('entrada')} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex justify-between items-center cursor-pointer hover:border-gray-500 transition">
-              <div><h2 className="text-gray-400 text-[10px] uppercase font-bold">Ingresos Extra</h2><p className="text-lg font-black text-green-400">+${entradasExtraEfec + entradasExtraTransf}</p></div>
-              <span className="text-[10px] text-gray-500 underline">Ver</span>
-            </div>
-            <div onClick={() => setVerDetalleModal('salida')} className="bg-gray-800 p-4 rounded-xl border border-red-900/40 flex justify-between items-center cursor-pointer hover:border-red-500 transition">
-              <div><h2 className="text-gray-400 text-[10px] uppercase font-bold">Salidas / Gastos</h2><p className="text-lg font-black text-red-400">-${salidasEfec + salidasTransf}</p></div>
-              <span className="text-[10px] text-gray-500 underline">Ver</span>
-            </div>
+          <div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg">
+            <h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda a Proveedores</h2>
+            <p className="text-3xl font-black text-orange-400">${deudaProveedores}</p>
           </div>
+        </div>
+
+        {/* Resumen de Puerta en Admin */}
+        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-6 flex justify-between items-center shadow-lg">
+          <div><h2 className="text-sm font-bold text-gray-400 uppercase">📊 Estadísticas de Puerta</h2><p className="text-sm text-white mt-1"><span className="text-green-400 font-bold">{personasVendidas}</span> Vendidas | <span className="text-yellow-400 font-bold">{personasLista}</span> Gratis</p></div>
+          <div className="text-right"><p className="text-xs text-gray-500 uppercase">Total Ingresos</p><p className="text-2xl font-black text-purple-400">{totalPersonas} personas</p></div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -566,12 +556,8 @@ function App() {
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-black uppercase text-white">📦 Base de Datos (Menú)</h2>
-              <div className="text-right">
-                <p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p>
-                <p className="text-xl font-black text-green-400">${capitalEnBarra}</p>
-              </div>
+              <div className="text-right"><p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p><p className="text-xl font-black text-green-400">${capitalEnBarra}</p></div>
             </div>
-
             <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 mb-6 bg-gray-700/50 p-3 rounded-xl border border-gray-600">
               <input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required />
               <input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required />
@@ -579,7 +565,6 @@ function App() {
               <select className="w-full sm:w-28 bg-gray-800 p-2 rounded text-sm" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)}><option value="bebida">Bebida</option><option value="combo">Combo</option><option value="entrada">Entrada</option></select>
               <button type="submit" className="bg-purple-600 px-4 py-2 rounded font-bold text-sm">+</button>
             </form>
-
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-[400px] overflow-y-auto pr-2 custom-scrollbar">
               {bebidas.map(b => (
                 <div key={b.id} className={`p-4 rounded-xl border relative ${b.stock < 10 ? 'bg-red-900/10 border-red-900' : 'bg-gray-700/30 border-gray-600'}`}>
@@ -599,16 +584,12 @@ function App() {
     );
   }
 
-  // VISTA: POS (VENTAS EN CAJA)
+  // VISTA: POS (VENTAS EN BARRA)
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {barraHeader}
       {!sesionActiva ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-          <p className="text-6xl mb-4">🔒</p>
-          <h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2>
-          <p className="text-gray-400 mt-2">Un administrador debe abrir la caja para poder vender.</p>
-        </div>
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2><p className="text-gray-400 mt-2">Un administrador debe abrir la caja.</p></div>
       ) : (
         <div className="flex-1 p-2 lg:p-4 grid grid-cols-1 lg:grid-cols-3 gap-4 max-w-6xl mx-auto w-full">
           <div className="lg:col-span-2 space-y-3">
@@ -621,7 +602,6 @@ function App() {
               ))}
             </div>
           </div>
-          
           <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col justify-between h-[450px] lg:h-auto shadow-2xl">
             <div>
               <h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2>
@@ -632,11 +612,7 @@ function App() {
                   {carrito.map((item) => (
                     <div key={item.id} className="flex items-center justify-between bg-gray-700/40 p-2 rounded-lg border border-gray-600">
                       <div className="flex-1 mr-2"><p className="font-bold text-xs line-clamp-1">{item.nombre}</p><p className="text-xs text-green-400 font-black">${item.precio * item.cantidad}</p></div>
-                      <div className="flex items-center space-x-1">
-                        <button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button>
-                        <span className="font-black text-sm w-4 text-center">{item.cantidad}</span>
-                        <button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button>
-                      </div>
+                      <div className="flex items-center space-x-1"><button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button><span className="font-black text-sm w-4 text-center">{item.cantidad}</span><button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button></div>
                     </div>
                   ))}
                 </div>
