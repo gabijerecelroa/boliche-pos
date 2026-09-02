@@ -6,9 +6,11 @@ function App() {
   const [vista, setVista] = useState('login');
   const [loading, setLoading] = useState(false);
 
-  // Sesión Activa
+  // Sesión Activa e Historial
   const [sesionActiva, setSesionActiva] = useState(null);
   const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
+  const [historial, setHistorial] = useState([]);
+  const [sesionExpandida, setSesionExpandida] = useState(null); // Para ver detalles en el historial
 
   // Estados de Caja
   const [bebidas, setBebidas] = useState([]);
@@ -19,9 +21,6 @@ function App() {
   // Estados del Dashboard (Admin)
   const [ventasSesion, setVentasSesion] = useState([]);
   const [movsSesion, setMovsSesion] = useState([]);
-  const [historial, setHistorial] = useState([]);
-  
-  // Modal de Detalles
   const [verDetalleModal, setVerDetalleModal] = useState(null);
 
   // Formularios Admin
@@ -35,10 +34,19 @@ function App() {
   const [nuevaCat, setNuevaCat] = useState('bebida');
 
   const cargarDatos = async () => {
+    // 1. Cargar Menú
     const { data: prods } = await supabase.from('bebidas').select('*').order('id');
     if (prods) setBebidas(prods);
 
-    const { data: sesion } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1).single();
+    // 2. Si es Admin, cargar el historial de fiestas pasadas siempre
+    if (user?.rol === 'admin') {
+      const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false });
+      if (hist) setHistorial(hist);
+    }
+
+    // 3. Buscar caja abierta (usando limit(1) para evitar errores si no hay)
+    const { data: sesionData } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
+    const sesion = sesionData && sesionData.length > 0 ? sesionData[0] : null;
     
     if (sesion) {
       setSesionActiva(sesion);
@@ -94,34 +102,21 @@ function App() {
     setVista('pos');
   };
 
-  /* ----- VENTAS Y CARRITO (BLINDADO) ----- */
+  /* ----- VENTAS Y CARRITO ----- */
   const agregarAlCarrito = (producto) => {
-    if (!producto || producto.stock <= 0) {
-      alert('⚠️ Sin stock disponible');
-      return;
-    }
-    
-    // Usamos función de actualización segura para evitar congelamientos
+    if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock disponible');
     setCarrito(prevCarrito => {
       const existe = prevCarrito.find(item => item.id === producto.id);
       if (existe) {
-        if (existe.cantidad >= producto.stock) {
-          alert('⚠️ Supera el stock en barra');
-          return prevCarrito;
-        }
+        if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock en barra'); return prevCarrito; }
         return prevCarrito.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item);
-      } else {
-        return [...prevCarrito, { ...producto, cantidad: 1 }];
-      }
+      } else return [...prevCarrito, { ...producto, cantidad: 1 }];
     });
   };
 
   const cambiarCantidad = (id, delta) => {
     setCarrito(prevCarrito => prevCarrito.map(item => {
-      if (item.id === id) {
-        const nuevaCant = item.cantidad + delta;
-        return nuevaCant > 0 ? { ...item, cantidad: nuevaCant } : null;
-      }
+      if (item.id === id) { const nuevaCant = item.cantidad + delta; return nuevaCant > 0 ? { ...item, cantidad: nuevaCant } : null; }
       return item;
     }).filter(Boolean));
   };
@@ -130,10 +125,7 @@ function App() {
     if (carrito.length === 0 || !sesionActiva) return;
     setLoading(true);
     const totalVenta = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
-    
-    const { data: ventaData, error } = await supabase.from('ventas').insert([
-      { cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id }
-    ]).select().single();
+    const { data: ventaData, error } = await supabase.from('ventas').insert([{ cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id }]).select().single();
     
     if (!error) {
       for (const item of carrito) await supabase.from('bebidas').update({ stock: item.stock - item.cantidad }).eq('id', item.id);
@@ -148,15 +140,12 @@ function App() {
     e.preventDefault();
     setLoading(true);
     await supabase.from('bebidas').insert([{ nombre: nuevoNombre, precio: Number(nuevoPrecio), stock: Number(nuevoStock), categoria: nuevaCat }]);
-    setNuevoNombre(''); setNuevoPrecio(''); setNuevoStock(''); cargarDatos(); setLoading(false); alert('✅ Producto agregado');
+    setNuevoNombre(''); setNuevoPrecio(''); setNuevoStock(''); cargarDatos(); setLoading(false);
   };
 
   const eliminarProducto = async (id, nombre) => {
-    if (window.confirm(`⚠️ PELIGRO: ¿Estás seguro de ELIMINAR "${nombre}" y todo su stock? Esta acción no se puede deshacer.`)) {
-      setLoading(true);
-      await supabase.from('bebidas').delete().eq('id', id);
-      await cargarDatos();
-      setLoading(false);
+    if (window.confirm(`⚠️ PELIGRO: ¿Eliminar "${nombre}" del menú?`)) {
+      setLoading(true); await supabase.from('bebidas').delete().eq('id', id); await cargarDatos(); setLoading(false);
     }
   };
 
@@ -172,6 +161,15 @@ function App() {
     if (!window.confirm('⚠️ ¿Estás seguro de CERRAR CAJA definitivamente y volver a cero?')) return;
     setLoading(true);
 
+    // Calcular Ranking de Ventas para el Historial
+    let conteoProductos = {};
+    ventasSesion.forEach(v => {
+      v.detalles.forEach(item => {
+        if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0;
+        conteoProductos[item.nombre] += item.cantidad;
+      });
+    });
+
     const resumenCierre = {
       estado: 'cerrada',
       cerrada_por: user.usuario,
@@ -180,6 +178,7 @@ function App() {
       recaudacion_transf: CAJA_BANCO,
       total_salidas: salidasEfec + salidasTransf,
       total_ingresos: entradasExtraEfec + entradasExtraTransf,
+      ranking_ventas: conteoProductos // Guardamos las más vendidas
     };
 
     await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id);
@@ -298,26 +297,90 @@ function App() {
     </header>
   );
 
-  // VISTA: ADMIN DASHBOARD
+  // VISTA: ADMIN DASHBOARD (Apertura + Historial cuando caja está cerrada)
   if (vista === 'admin') {
     if (!sesionActiva) {
       return (
         <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
           {barraHeader}
-          <div className="flex flex-col items-center justify-center mt-12">
-            <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 w-full max-w-md text-center shadow-2xl">
-              <h2 className="text-3xl font-black text-white mb-2">APERTURA</h2>
-              <p className="text-gray-400 text-sm mb-6">Inicia un turno para habilitar la caja y registrar ventas.</p>
-              <form onSubmit={abrirCaja} className="space-y-4">
-                <input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required />
-                <button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)]">🔓 ABRIR CAJA</button>
-              </form>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+            
+            {/* Columna APERTURA */}
+            <div className="lg:col-span-1">
+              <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl">
+                <h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2>
+                <p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p>
+                <form onSubmit={abrirCaja} className="space-y-4">
+                  <input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required />
+                  <button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)]">🔓 ABRIR CAJA</button>
+                </form>
+              </div>
+            </div>
+
+            {/* Columna HISTORIAL DETALLADO */}
+            <div className="lg:col-span-2">
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]">
+                <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">
+                  📚 Historial y Estadísticas de Cierres
+                </h2>
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+                  {historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres registrados aún.</p> :
+                    historial.map(h => (
+                      <div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition">
+                        <div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}>
+                          <div>
+                            <h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3>
+                            <p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 Cerrado por: {h.cerrada_por}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p>
+                            <p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Ver Detalles'}</p>
+                          </div>
+                        </div>
+                        
+                        {/* Acordeón de Detalles */}
+                        {sesionExpandida === h.id && (
+                          <div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4>
+                              <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
+                                <div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div>
+                                <div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div>
+                                <hr className="border-gray-600 my-1" />
+                                <div className="flex justify-between"><span>Ingresos Extra:</span><span className="font-bold text-green-400">+${h.total_ingresos || 0}</span></div>
+                                <div className="flex justify-between"><span>Gastos/Salidas:</span><span className="font-bold text-red-400">-${h.total_salidas || 0}</span></div>
+                              </div>
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top 5 Bebidas Vendidas</h4>
+                              <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
+                                {h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (
+                                  Object.entries(h.ranking_ventas)
+                                    .sort(([,a], [,b]) => b - a)
+                                    .slice(0, 5)
+                                    .map(([nombre, cant]) => (
+                                      <div key={nombre} className="flex justify-between border-b border-gray-700 pb-1">
+                                        <span className="truncate pr-2 text-gray-300">{nombre}</span>
+                                        <span className="font-black text-yellow-400">{cant}x</span>
+                                      </div>
+                                    ))
+                                ) : <span className="text-gray-500 text-xs">Sin datos de productos en esta fiesta.</span>}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
             </div>
           </div>
         </div>
       );
     }
 
+    // SI LA CAJA ESTÁ ABIERTA (DASHBOARD FINANCIERO)
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
@@ -409,7 +472,6 @@ function App() {
                 <p className="text-xl font-black text-green-400">${capitalEnBarra}</p>
               </div>
             </div>
-
             <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 mb-6 bg-gray-700/50 p-3 rounded-xl border border-gray-600">
               <input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required />
               <input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required />
@@ -441,7 +503,6 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {barraHeader}
-      
       {!sesionActiva ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
           <p className="text-6xl mb-4">🔒</p>
