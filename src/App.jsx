@@ -1,12 +1,31 @@
 import { useState } from 'react';
+import { supabase } from './supabaseClient';
 
 function App() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    alert('Ingresando a la caja como: ' + username);
+    setLoading(true);
+
+    // Consultamos a Supabase si el usuario y la clave coinciden
+    const { data, error } = await supabase
+      .from('cajeros')
+      .select('*')
+      .eq('usuario', username)
+      .eq('password', password)
+      .single();
+
+    setLoading(false);
+
+    if (error || !data) {
+      alert('❌ Error: Usuario o contraseña incorrectos.');
+    } else {
+      alert('✅ ¡Bienvenido! Ingresando a la caja como: ' + data.usuario);
+      // Aquí más adelante lo mandaremos a la pantalla de ventas
+    }
   };
 
   return (
@@ -19,9 +38,10 @@ function App() {
             <input
               type="text"
               className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white border border-gray-600 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 focus:outline-none transition-colors"
-              placeholder="cajero_barra1"
+              placeholder="cajero1"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              required
             />
           </div>
           <div>
@@ -32,13 +52,15 @@ function App() {
               placeholder="********"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              required
             />
           </div>
           <button
             type="submit"
-            className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 shadow-lg shadow-purple-500/30"
+            disabled={loading}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-bold py-3 px-4 rounded-lg transition duration-300 shadow-lg shadow-purple-500/30"
           >
-            Abrir Caja
+            {loading ? 'Verificando...' : 'Abrir Caja'}
           </button>
         </form>
       </div>
