@@ -6,24 +6,25 @@ function App() {
   const [vista, setVista] = useState('login');
   const [loading, setLoading] = useState(false);
 
-  // Sesión Activa e Historial
+  // Sesiones e Historial
   const [sesionActiva, setSesionActiva] = useState(null);
   const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
   const [historial, setHistorial] = useState([]);
   const [sesionExpandida, setSesionExpandida] = useState(null);
 
-  // Estados de Caja
+  // Estados de Caja y Proveedores
   const [bebidas, setBebidas] = useState([]);
   const [carrito, setCarrito] = useState([]);
   const [ticketActual, setTicketActual] = useState(null);
   const [metodoPagoPOS, setMetodoPagoPOS] = useState('efectivo');
+  const [proveedores, setProveedores] = useState([]);
 
   // Estados del Dashboard (Admin)
   const [ventasSesion, setVentasSesion] = useState([]);
   const [movsSesion, setMovsSesion] = useState([]);
   const [verDetalleModal, setVerDetalleModal] = useState(null);
 
-  // Formularios Admin
+  // Formularios
   const [movTipo, setMovTipo] = useState('salida');
   const [movConcepto, setMovConcepto] = useState('');
   const [movMonto, setMovMonto] = useState('');
@@ -32,16 +33,23 @@ function App() {
   const [nuevoPrecio, setNuevoPrecio] = useState('');
   const [nuevoStock, setNuevoStock] = useState('');
   const [nuevaCat, setNuevaCat] = useState('bebida');
+  const [nuevoProvNombre, setNuevoProvNombre] = useState('');
 
   const cargarDatos = async () => {
+    // 1. Bebidas y Proveedores
     const { data: prods } = await supabase.from('bebidas').select('*').order('id');
     if (prods) setBebidas(prods);
 
+    const { data: provs } = await supabase.from('proveedores').select('*').order('id');
+    if (provs) setProveedores(provs);
+
+    // 2. Historial si es admin
     if (user?.rol === 'admin') {
       const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false });
       if (hist) setHistorial(hist);
     }
 
+    // 3. Caja Activa
     const { data: sesionData } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
     const sesion = sesionData && sesionData.length > 0 ? sesionData[0] : null;
     
@@ -130,6 +138,50 @@ function App() {
       setCarrito([]); cargarDatos();
     }
     setLoading(false);
+  };
+
+  /* ----- MÓDULO PROVEEDORES ----- */
+  const crearProveedor = async (e) => {
+    e.preventDefault();
+    if (!nuevoProvNombre) return;
+    setLoading(true);
+    await supabase.from('proveedores').insert([{ nombre: nuevoProvNombre }]);
+    setNuevoProvNombre(''); await cargarDatos(); setLoading(false);
+  };
+
+  const eliminarProveedor = async (id, nombre) => {
+    if (window.confirm(`⚠️ PELIGRO: ¿Eliminar al proveedor "${nombre}" y su historial de deudas?`)) {
+      setLoading(true); await supabase.from('proveedores').delete().eq('id', id); await cargarDatos(); setLoading(false);
+    }
+  };
+
+  const agregarCompraProv = async (id, comprasActuales) => {
+    const prod = prompt('Carga el nombre de la bebida o producto recibido:');
+    if (!prod) return;
+    const cant = prompt(`Cantidad ingresada de ${prod}:`);
+    if (!cant || isNaN(cant)) return;
+    const costo = prompt(`Precio de COSTO UNITARIO al que te lo vende: $`);
+    if (!costo || isNaN(costo)) return;
+
+    const nuevaCompra = { id: Date.now(), producto: prod, cantidad: Number(cant), costo: Number(costo) };
+    const nuevasCompras = [...(comprasActuales || []), nuevaCompra];
+    await supabase.from('proveedores').update({ compras: nuevasCompras }).eq('id', id);
+    cargarDatos();
+  };
+
+  const eliminarCompraProv = async (provId, comprasActuales, compraId) => {
+    if (!window.confirm('¿Borrar este ítem de la factura del proveedor? (Ideal usar al pagarle)')) return;
+    const nuevasCompras = comprasActuales.filter(c => c.id !== compraId);
+    await supabase.from('proveedores').update({ compras: nuevasCompras }).eq('id', provId);
+    cargarDatos();
+  };
+
+  const aplicarDescuentoProv = async (id, descActual) => {
+    const desc = prompt('Ingresar descuento a favor en dinero ($):', descActual || 0);
+    if (desc !== null && !isNaN(desc)) {
+      await supabase.from('proveedores').update({ descuento: Number(desc) }).eq('id', id);
+      cargarDatos();
+    }
   };
 
   /* ----- PANEL ADMIN ----- */
@@ -278,18 +330,85 @@ function App() {
   }
 
   const barraHeader = (
-    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex justify-between items-center mb-4 rounded-b-xl lg:rounded-xl">
-      <div>
+    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3">
+      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
         <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
         {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
       </div>
-      <div className="flex space-x-2">
-        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 text-xs px-3 py-2 rounded font-bold">⚙️ Admin</button>}
-        {user.rol === 'admin' && vista !== 'pos' && sesionActiva && <button onClick={() => setVista('pos')} className="bg-green-600 text-xs px-3 py-2 rounded font-bold">➡️ Ventas</button>}
-        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-xs px-3 py-2 rounded font-bold">Salir</button>
+      <div className="flex space-x-2 w-full md:w-auto justify-center">
+        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">🚚 Provs</button>}
+        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">⚙️ Admin</button>}
+        {user.rol === 'admin' && vista !== 'pos' && sesionActiva && <button onClick={() => setVista('pos')} className="bg-green-600 text-xs px-3 py-2 rounded font-bold uppercase shadow">➡️ Ventas</button>}
+        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
       </div>
     </header>
   );
+
+  // VISTA: GESTIÓN DE PROVEEDORES
+  if (vista === 'proveedores') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
+        {barraHeader}
+        <div className="max-w-6xl mx-auto mt-6">
+          
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-black uppercase text-orange-400">🚚 Proveedores y Deudas</h2>
+              <p className="text-sm text-gray-400">Registra recibos de mercadería, aplica descuentos y controla lo que debes pagar.</p>
+            </div>
+            <form onSubmit={crearProveedor} className="flex w-full md:w-auto">
+              <input type="text" placeholder="Nombre (Ej: Quilmes)" className="w-full bg-gray-700 p-3 rounded-l-lg focus:outline-none" value={nuevoProvNombre} onChange={e => setNuevoProvNombre(e.target.value)} required />
+              <button type="submit" disabled={loading} className="bg-orange-600 hover:bg-orange-500 px-6 font-bold rounded-r-lg">Añadir</button>
+            </form>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {proveedores.map(p => {
+              const subtotal = (p.compras || []).reduce((acc, c) => acc + (c.cantidad * c.costo), 0);
+              const totalPagar = subtotal - (p.descuento || 0);
+
+              return (
+                <div key={p.id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl relative flex flex-col">
+                  <button onClick={() => eliminarProveedor(p.id, p.nombre)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-xl transition">❌</button>
+                  <h3 className="text-xl font-black text-white uppercase mb-4 pr-8 border-b border-gray-700 pb-2">{p.nombre}</h3>
+                  
+                  <div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[250px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">
+                    {(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4">Cero stock registrado.</p> : 
+                      p.compras.map(c => (
+                        <div key={c.id} className="flex justify-between items-center bg-gray-800 p-2 rounded text-sm shadow">
+                          <div className="flex-1 pr-2">
+                            <p className="font-bold text-white line-clamp-1">{c.producto}</p>
+                            <p className="text-[10px] text-gray-400">{c.cantidad} unidades a ${c.costo} c/u</p>
+                          </div>
+                          <div className="flex items-center space-x-3">
+                            <span className="font-black text-green-400">${c.cantidad * c.costo}</span>
+                            <button onClick={() => eliminarCompraProv(p.id, p.compras, c.id)} className="text-red-500 hover:text-red-400 text-lg">🗑️</button>
+                          </div>
+                        </div>
+                      ))
+                    }
+                  </div>
+
+                  <div className="space-y-1 mb-4 bg-gray-900 p-3 rounded-lg">
+                    <div className="flex justify-between text-xs text-gray-400"><span>Subtotal bruto:</span><span>${subtotal}</span></div>
+                    <div className="flex justify-between text-xs text-yellow-400"><span>Descuento aplicado:</span><span>-${p.descuento || 0}</span></div>
+                    <hr className="border-gray-700 my-2"/>
+                    <div className="flex justify-between text-lg font-black text-white"><span>TOTAL A PAGAR:</span><span className="text-orange-400">${totalPagar}</span></div>
+                  </div>
+
+                  <div className="flex space-x-2">
+                    <button onClick={() => agregarCompraProv(p.id, p.compras)} className="flex-1 bg-green-600 hover:bg-green-500 py-3 rounded-lg font-bold text-[10px] lg:text-xs uppercase shadow">+ Compra</button>
+                    <button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-lg font-bold text-[10px] lg:text-xs uppercase shadow">🎁 Descuento</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+        </div>
+      </div>
+    );
+  }
 
   // VISTA: ADMIN DASHBOARD (Apertura + Historial cuando caja está cerrada)
   if (vista === 'admin') {
