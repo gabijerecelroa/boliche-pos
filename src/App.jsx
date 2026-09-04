@@ -79,6 +79,20 @@ function App() {
 
   useEffect(() => { if (user) cargarDatos(); }, [user, vista]);
 
+  // 🔴 MAGIA DE TIEMPO REAL: El Radar que actualiza todo solo
+  useEffect(() => {
+    if (!user) return;
+    const radar = supabase.channel('gjbross_en_vivo')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ventas' }, () => cargarDatos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'puerta' }, () => cargarDatos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'listas_vip' }, () => cargarDatos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'movimientos' }, () => cargarDatos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bebidas' }, () => cargarDatos())
+      .subscribe();
+
+    return () => { supabase.removeChannel(radar); };
+  }, [user]);
+
   // Cálculos Financieros
   const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
   const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + ((c.cantidad||1) * c.costo), 0) - (p.descuento || 0)), 0);
@@ -147,10 +161,12 @@ function App() {
     const canvas = document.createElement('canvas'); 
     canvas.width = 1080; canvas.height = 1920; 
     const ctx = canvas.getContext('2d');
+    
     const grad = ctx.createLinearGradient(0, 0, 1080, 1920); 
     grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); 
     ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820);
+    
     ctx.fillStyle = '#10b981'; ctx.font = 'bold 45px sans-serif'; ctx.textAlign = 'center'; 
     ctx.fillText(`FIESTA: ${sesionActiva?.nombre_fiesta?.toUpperCase() || ''}`, 540, 150);
     ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; 
@@ -161,6 +177,7 @@ function App() {
     ctx.fillText(qrData.nombre.toUpperCase(), 540, 600);
     ctx.fillStyle = '#9ca3af'; ctx.font = '40px sans-serif'; 
     ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 680);
+    
     const img = new Image(); img.crossOrigin = 'Anonymous';
     img.onload = () => {
         ctx.fillStyle = '#ffffff'; ctx.fillRect(270, 800, 540, 540); 
@@ -169,6 +186,7 @@ function App() {
         ctx.fillText(qrData.codigo, 540, 1500);
         ctx.fillStyle = '#9ca3af'; ctx.font = '35px sans-serif'; 
         ctx.fillText('Presenta este código en la puerta', 540, 1750);
+        
         const link = document.createElement('a'); 
         link.download = `Invitacion_${qrData.tipo_pase||'vip'}_${qrData.nombre}.png`; 
         link.href = canvas.toDataURL('image/png'); 
@@ -177,7 +195,6 @@ function App() {
     img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`;
   };
 
-  // NUEVO SISTEMA DE INGRESO PARCIAL
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     setMostrarEscaner(false); 
     const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === textoCodigo.toUpperCase()); 
@@ -190,10 +207,9 @@ function App() {
     const yaIngresados = listaEncontrada.ingresados || 0;
     const disponibles = listaEncontrada.cantidad - yaIngresados;
     
-    // Pregunta clave para ingresos parciales
     const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\n\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n\n¿Cuántos ingresan AHORA MISMO?`, disponibles);
     
-    if (cantIngresarStr === null) return; // Si cancela
+    if (cantIngresarStr === null) return; 
     const cantIngresar = Number(cantIngresarStr);
     
     if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) {
@@ -376,13 +392,11 @@ function App() {
     );
   }
 
-  // VISTA: USUARIO PUERTA (ESCANER) Y ADMIN EN PANTALLA PUERTA
-  if (user.rol === 'puerta' || (user.rol === 'admin' && vista === 'puerta')) {
+  // VISTA: USUARIO PUERTA (ESCANER)
+  if (user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
-        {barraHeader}
-        
         {mostrarEscaner && (
           <div className="fixed inset-0 bg-black z-[100] flex flex-col">
             <div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8">
@@ -400,106 +414,55 @@ function App() {
             </div>
           </div>
         )}
-        
-        {qrGenerado && (
-          <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-            <div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div>
-              <h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2>
-              <p className="text-purple-600 font-black uppercase text-sm mb-6">{sesionActiva?.nombre_fiesta}</p>
-              <div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6">
-                <p className="font-black text-2xl text-black uppercase">{qrGenerado.nombre}</p>
-                <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 PASE GENERAL'} ({qrGenerado.cantidad} pers)</p>
-              </div>
-              <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button>
-              <button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
-            </div>
+        <header className="bg-gray-800 p-4 rounded-xl mb-6 flex justify-between items-center border border-purple-500/30 shadow-lg">
+          <div>
+            <h1 className="text-xl font-black text-purple-400">CONTROL PUERTA</h1>
+            <p className="text-xs text-green-400 uppercase font-bold">{sesionActiva ? sesionActiva.nombre_fiesta : 'Caja Cerrada'}</p>
           </div>
-        )}
-
+          <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 px-4 py-2 rounded-lg font-bold text-xs uppercase shadow">Salir</button>
+        </header>
         {!sesionActiva ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center">
             <p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2><p className="text-gray-400 mt-2">Un administrador debe abrir la caja adentro.</p>
           </div>
         ) : (
-          <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
-            
-            {/* Si es Admin, mostramos también el generador de QRs a la izquierda */}
-            {user.rol === 'admin' && (
-              <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit">
-                <div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div>
-                <h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>
-                <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>
-                <form onSubmit={generarQRLista} className="space-y-6 relative z-10">
-                  <div>
-                    <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label>
-                    <div className="flex space-x-2">
-                      <button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button>
-                      <button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP / Accesos</button>
+          <div className="max-w-xl mx-auto w-full space-y-6">
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl">
+              <div className="text-center">
+                <p className="text-xs text-gray-400 font-bold uppercase">Ingresados (Adentro)</p>
+                <p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-400 font-bold uppercase">Listas Pendientes</p>
+                <p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} />
+                <span className="absolute left-4 top-4 text-xl">🔍</span>
+              </div>
+              <button onClick={() => setMostrarEscaner(true)} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center">📷</button>
+            </div>
+            <div className="space-y-3 max-h-[50vh] overflow-y-auto custom-scrollbar pb-10">
+              {listasFiltradas.length === 0 ? <p className="text-center text-gray-500 py-10 font-bold uppercase">No se encontraron resultados.</p> :
+                listasFiltradas.map(l => (
+                  <div key={l.id} className={`p-5 rounded-2xl border-2 flex justify-between items-center transition ${l.estado === 'ingresado' ? 'bg-green-900/10 border-green-900/50 opacity-40' : 'bg-gray-800 border-gray-600 shadow-lg'}`}>
+                    <div>
+                      <p className="font-black text-xl uppercase text-white">{l.nombre}</p>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">
+                        {l.tipo_pase} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span>
+                      </p>
+                      <p className="text-sm text-blue-400 font-bold mt-2">Ingresados: {l.ingresados || 0} / {l.cantidad}</p>
                     </div>
+                    {l.estado === 'ingresado' ? (
+                      <span className="text-green-500 font-black text-sm uppercase bg-green-900/40 px-3 py-2 rounded-lg">✅ Adentro</span>
+                    ) : (
+                      <button onClick={() => procesarEscaneoAutomatico(l.codigo)} className="bg-purple-600 hover:bg-purple-500 px-5 py-4 rounded-xl font-black text-sm uppercase shadow-[0_0_15px_rgba(147,51,234,0.4)] active:scale-95 transition">Ingreso Parcial (+)</button>
+                    )}
                   </div>
-                  <div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Gabriel Roa" /></div>
-                  <div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div>
-                  <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4">Generar Pase ✨</button>
-                </form>
-              </div>
-            )}
-
-            {/* Zona de Escáner y Control de Accesos (Ocupa el centro si es 'puerta', o la derecha si es 'admin') */}
-            <div className={`space-y-6 ${user.rol === 'puerta' ? 'lg:col-span-2 max-w-xl mx-auto w-full' : ''}`}>
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl">
-                <div className="text-center">
-                  <p className="text-xs text-gray-400 font-bold uppercase">Gratis (Adentro)</p>
-                  <p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-xs text-gray-400 font-bold uppercase">QRs Activos</p>
-                  <p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p>
-                </div>
-              </div>
-              
-              <div className="flex gap-3">
-                <div className="relative flex-1">
-                  <input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} />
-                  <span className="absolute left-4 top-4 text-xl">🔍</span>
-                </div>
-                <button onClick={() => setMostrarEscaner(true)} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center">📷</button>
-              </div>
-
-              <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl h-[60vh] flex flex-col">
-                <h2 className="text-xl font-black uppercase text-white mb-4 border-b border-gray-700 pb-2">📋 Listas y Accesos</h2>
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
-                  {listasFiltradas.length === 0 ? <p className="text-center text-gray-500 py-10 font-bold uppercase">No hay pases generados.</p> :
-                    listasFiltradas.map(l => (
-                      <div key={l.id} className={`p-5 rounded-2xl border-2 transition ${l.estado === 'ingresado' ? 'bg-green-900/10 border-green-900/50 opacity-50' : 'bg-gray-800 border-gray-600 shadow-lg'}`}>
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-black text-lg uppercase text-white leading-tight">{l.nombre}</p>
-                            <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">
-                              {l.tipo_pase} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span>
-                            </p>
-                            <p className="text-sm text-blue-400 font-bold mt-2">Ingresados: {l.ingresados || 0} / {l.cantidad}</p>
-                          </div>
-                          {/* El Admin puede volver a descargar el QR. La Puerta solo lee. */}
-                          {user.rol === 'admin' && (
-                            <button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg shadow transition">⬇️ QR</button>
-                          )}
-                        </div>
-
-                        {l.estado === 'ingresado' ? (
-                          <div className="mt-3 text-center bg-green-900/40 py-2 rounded-lg">
-                            <span className="text-green-500 font-black text-sm uppercase">✅ Completado</span>
-                          </div>
-                        ) : (
-                          <button onClick={() => procesarEscaneoAutomatico(l.codigo)} className="w-full mt-3 bg-purple-600 hover:bg-purple-500 py-3 rounded-xl font-black text-sm uppercase shadow-lg active:scale-95 transition">
-                            Ingreso Parcial (+ Personas)
-                          </button>
-                        )}
-                      </div>
-                    ))
-                  }
-                </div>
-              </div>
+                ))
+              }
             </div>
           </div>
         )}
@@ -552,97 +515,6 @@ function App() {
             </form>
           </div>
         )}
-      </div>
-    );
-  }
-
-  // VISTA: PROVEEDORES
-  if (vista === 'proveedores') {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
-        {barraHeader}
-        {modalProv && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-md">
-              <h2 className="text-xl font-black uppercase text-orange-400 mb-4">Ingreso de: {modalProv.nombre}</h2>
-              <form onSubmit={guardarRegistroProv} className="space-y-4">
-                <select className="w-full bg-gray-700 p-3 rounded-lg font-bold focus:outline-none" value={tipoProvReg} onChange={e => setTipoProvReg(e.target.value)}>
-                  <option value="bebida">📦 Mercadería (Suma a Stock)</option>
-                  <option value="deuda">📄 Deuda Extra (Ej: Flete)</option>
-                </select>
-                {tipoProvReg === 'bebida' ? (
-                  <>
-                    <select className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={provBebidaId} onChange={e => setProvBebidaId(e.target.value)} required>
-                      <option value="">-- Selecciona producto que llegó --</option>
-                      {bebidas.map(b => <option key={b.id} value={b.id}>{b.nombre} (Stock: {b.stock})</option>)}
-                    </select>
-                    <div className="flex gap-2">
-                      <input type="number" placeholder="Cant. traída" className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCant} onChange={e => setProvCant(e.target.value)} required />
-                      <input type="number" placeholder="$ Costo Unit." className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <input type="text" placeholder="Concepto deuda" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provConceptoDeuda} onChange={e => setProvConceptoDeuda(e.target.value)} required />
-                    <input type="number" placeholder="Monto total $" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required />
-                  </>
-                )}
-                <div className="flex space-x-2 pt-2">
-                  <button type="button" onClick={() => setModalProv(null)} className="flex-1 bg-gray-600 py-3 rounded-lg font-bold uppercase">Cancelar</button>
-                  <button type="submit" disabled={loading} className="flex-1 bg-orange-600 hover:bg-orange-500 py-3 rounded-lg font-black uppercase shadow">Guardar</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-        <div className="max-w-6xl mx-auto mt-6 flex-1 w-full">
-          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <div>
-              <h2 className="text-2xl font-black uppercase text-orange-400">🚚 Proveedores y Stock</h2>
-              <p className="text-sm text-gray-400">Al cargar mercadería acá, el stock de la barra se actualiza solo.</p>
-            </div>
-            <form onSubmit={crearProveedor} className="flex w-full md:w-auto">
-              <input type="text" placeholder="Nombre Prov." className="w-full bg-gray-700 p-3 rounded-l-xl focus:outline-none" value={nuevoProvNombre} onChange={e => setNuevoProvNombre(e.target.value)} required />
-              <button type="submit" className="bg-orange-600 px-6 font-bold rounded-r-xl">Añadir</button>
-            </form>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-10">
-            {proveedores.map(p => {
-              const subtotal = (p.compras || []).reduce((acc, c) => acc + ((c.cantidad||1) * c.costo), 0);
-              const totalPagar = subtotal - (p.descuento || 0);
-              return (
-                <div key={p.id} className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative flex flex-col">
-                  <button onClick={() => eliminarProveedor(p.id, p.nombre)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-xl transition">❌</button>
-                  <h3 className="text-xl font-black text-white uppercase mb-4 pr-8 border-b border-gray-700 pb-2">{p.nombre}</h3>
-                  <div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[200px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">
-                    {(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4 font-bold uppercase">Sin deudas.</p> : 
-                      p.compras.map(c => (
-                        <div key={c.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg text-sm shadow border border-gray-700">
-                          <div className="flex-1 pr-2">
-                            <p className="font-bold text-white line-clamp-1">{c.producto}</p>
-                            <p className="text-[10px] text-gray-400">{c.tipo==='bebida'?`${c.cantidad}x (Stock sumado)`:'Cargo extra'}</p>
-                          </div>
-                          <span className="font-black text-orange-400 text-lg">${(c.cantidad||1) * c.costo}</span>
-                        </div>
-                      ))
-                    }
-                  </div>
-                  <div className="space-y-1 mb-3 bg-gray-900 p-4 rounded-xl border border-gray-700">
-                    <div className="flex justify-between text-xs text-gray-400 font-bold"><span>Subtotal:</span><span>${subtotal}</span></div>
-                    <div className="flex justify-between text-xs text-yellow-400 font-bold"><span>Descuento:</span><span>-${p.descuento || 0}</span></div>
-                    <hr className="border-gray-700 my-2"/>
-                    <div className="flex justify-between text-lg font-black text-white"><span>DEUDA:</span><span className="text-orange-400">${totalPagar}</span></div>
-                  </div>
-                  <div className="flex space-x-2 mb-3">
-                    <button onClick={() => {setModalProv(p); setTipoProvReg('bebida');}} className="flex-1 bg-gray-600 hover:bg-gray-500 py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95">+ Sumar</button>
-                    <button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95">🎁 Desc.</button>
-                  </div>
-                  <button onClick={() => pagarDeudaProveedor(p, totalPagar)} className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-xl font-black text-sm uppercase shadow-[0_0_15px_rgba(220,38,38,0.4)] transition active:scale-95">💸 Pagar con Caja</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
     );
   }
@@ -778,6 +650,7 @@ function App() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="space-y-6">
             
+            {/* Monitor VIP en Admin */}
             <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
               <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex justify-between items-center">👑 Monitor Puerta <span className="text-xs bg-green-900/40 text-green-400 px-2 py-1 rounded">Adentro: {personasListaIngresadas}</span></h2>
               <div className="max-h-[200px] overflow-y-auto custom-scrollbar space-y-2">
@@ -839,6 +712,169 @@ function App() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // VISTA: PUERTA (GENERADOR DE QRS Y LISTAS DE LUJO)
+  if (vista === 'puerta') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
+        {barraHeader}
+        
+        {qrGenerado && (
+          <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+            <div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div>
+              <h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2>
+              <p className="text-purple-600 font-black uppercase text-sm mb-6">{sesionActiva?.nombre_fiesta}</p>
+              
+              <div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6">
+                <p className="font-black text-2xl text-black uppercase">{qrGenerado.nombre}</p>
+                <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 PASE GENERAL'} ({qrGenerado.cantidad} pers)</p>
+              </div>
+
+              <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button>
+              <button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
+            </div>
+          </div>
+        )}
+
+        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit">
+            <div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div>
+            <h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>
+            <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>
+            
+            <form onSubmit={generarQRLista} className="space-y-6 relative z-10">
+              <div>
+                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label>
+                <div className="flex space-x-2">
+                  <button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button>
+                  <button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP / Accesos</button>
+                </div>
+              </div>
+
+              <div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Gabriel Roa" /></div>
+              
+              <div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div>
+              
+              <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4">Generar Pase ✨</button>
+            </form>
+          </div>
+
+          {/* HISTORIAL DE QRS PARA RE-DESCARGAR */}
+          <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl">
+            <h2 className="text-xl font-black uppercase text-white mb-4">📋 Listas Generadas</h2>
+            <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3 pr-2">
+              {listasVip.length === 0 ? <p className="text-gray-500">No hay pases generados.</p> :
+                listasVip.map(l => (
+                  <div key={l.id} className="bg-gray-700 p-4 rounded-xl flex justify-between items-center border border-gray-600">
+                    <div>
+                      <p className="font-bold text-lg text-white uppercase">{l.nombre} <span className="text-[10px] bg-purple-600 px-2 py-1 rounded text-white ml-2 align-middle">{l.tipo_pase?.toUpperCase() || 'VIP'}</span></p>
+                      <p className="text-xs text-gray-400 mt-1">Cant: {l.cantidad} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span></p>
+                    </div>
+                    <div className="flex flex-col items-end space-y-2">
+                      {l.estado === 'ingresado' ? <span className="text-green-400 font-black text-[10px] uppercase bg-green-900/40 px-2 py-1 rounded">✅ Adentro</span> : <span className="text-yellow-400 font-black text-[10px] uppercase bg-yellow-900/40 px-2 py-1 rounded">Pendiente</span>}
+                      <button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded-lg font-bold text-[10px] uppercase shadow transition">⬇️ Bajar QR</button>
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // VISTA: PROVEEDORES
+  if (vista === 'proveedores') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
+        {barraHeader}
+        {modalProv && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-md">
+              <h2 className="text-xl font-black uppercase text-orange-400 mb-4">Ingreso de: {modalProv.nombre}</h2>
+              <form onSubmit={guardarRegistroProv} className="space-y-4">
+                <select className="w-full bg-gray-700 p-3 rounded-lg font-bold focus:outline-none" value={tipoProvReg} onChange={e => setTipoProvReg(e.target.value)}>
+                  <option value="bebida">📦 Mercadería (Suma a Stock)</option>
+                  <option value="deuda">📄 Deuda Extra (Ej: Flete)</option>
+                </select>
+                {tipoProvReg === 'bebida' ? (
+                  <>
+                    <select className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={provBebidaId} onChange={e => setProvBebidaId(e.target.value)} required>
+                      <option value="">-- Selecciona producto que llegó --</option>
+                      {bebidas.map(b => <option key={b.id} value={b.id}>{b.nombre} (Stock: {b.stock})</option>)}
+                    </select>
+                    <div className="flex gap-2">
+                      <input type="number" placeholder="Cant. traída" className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCant} onChange={e => setProvCant(e.target.value)} required />
+                      <input type="number" placeholder="$ Costo Unit." className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <input type="text" placeholder="Concepto deuda" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provConceptoDeuda} onChange={e => setProvConceptoDeuda(e.target.value)} required />
+                    <input type="number" placeholder="Monto total $" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required />
+                  </>
+                )}
+                <div className="flex space-x-2 pt-2">
+                  <button type="button" onClick={() => setModalProv(null)} className="flex-1 bg-gray-600 py-3 rounded-lg font-bold uppercase">Cancelar</button>
+                  <button type="submit" disabled={loading} className="flex-1 bg-orange-600 hover:bg-orange-500 py-3 rounded-lg font-black uppercase shadow">Guardar</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        <div className="max-w-6xl mx-auto mt-6 flex-1 w-full">
+          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-black uppercase text-orange-400">🚚 Proveedores y Stock</h2>
+              <p className="text-sm text-gray-400">Al cargar mercadería acá, el stock de la barra se actualiza solo.</p>
+            </div>
+            <form onSubmit={crearProveedor} className="flex w-full md:w-auto">
+              <input type="text" placeholder="Nombre Prov." className="w-full bg-gray-700 p-3 rounded-l-xl focus:outline-none" value={nuevoProvNombre} onChange={e => setNuevoProvNombre(e.target.value)} required />
+              <button type="submit" className="bg-orange-600 px-6 font-bold rounded-r-xl">Añadir</button>
+            </form>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-10">
+            {proveedores.map(p => {
+              const subtotal = (p.compras || []).reduce((acc, c) => acc + ((c.cantidad||1) * c.costo), 0);
+              const totalPagar = subtotal - (p.descuento || 0);
+              return (
+                <div key={p.id} className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative flex flex-col">
+                  <button onClick={() => eliminarProveedor(p.id, p.nombre)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-xl transition">❌</button>
+                  <h3 className="text-xl font-black text-white uppercase mb-4 pr-8 border-b border-gray-700 pb-2">{p.nombre}</h3>
+                  <div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[200px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">
+                    {(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4 font-bold uppercase">Sin deudas.</p> : 
+                      p.compras.map(c => (
+                        <div key={c.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg text-sm shadow border border-gray-700">
+                          <div className="flex-1 pr-2">
+                            <p className="font-bold text-white line-clamp-1">{c.producto}</p>
+                            <p className="text-[10px] text-gray-400">{c.tipo==='bebida'?`${c.cantidad}x (Stock sumado)`:'Cargo extra'}</p>
+                          </div>
+                          <span className="font-black text-orange-400 text-lg">${(c.cantidad||1) * c.costo}</span>
+                        </div>
+                      ))
+                    }
+                  </div>
+                  <div className="space-y-1 mb-3 bg-gray-900 p-4 rounded-xl border border-gray-700">
+                    <div className="flex justify-between text-xs text-gray-400 font-bold"><span>Subtotal:</span><span>${subtotal}</span></div>
+                    <div className="flex justify-between text-xs text-yellow-400 font-bold"><span>Descuento:</span><span>-${p.descuento || 0}</span></div>
+                    <hr className="border-gray-700 my-2"/>
+                    <div className="flex justify-between text-lg font-black text-white"><span>DEUDA:</span><span className="text-orange-400">${totalPagar}</span></div>
+                  </div>
+                  <div className="flex space-x-2 mb-3">
+                    <button onClick={() => {setModalProv(p); setTipoProvReg('bebida');}} className="flex-1 bg-gray-600 hover:bg-gray-500 py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95">+ Sumar</button>
+                    <button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95">🎁 Desc.</button>
+                  </div>
+                  <button onClick={() => pagarDeudaProveedor(p, totalPagar)} className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-xl font-black text-sm uppercase shadow-[0_0_15px_rgba(220,38,38,0.4)] transition active:scale-95">💸 Pagar con Caja</button>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
