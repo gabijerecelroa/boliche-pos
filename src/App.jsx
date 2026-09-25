@@ -24,6 +24,7 @@ function App() {
   const [carrito, setCarrito] = useState([]);
   const [ticketActual, setTicketActual] = useState(null);
   const [metodoPagoPOS, setMetodoPagoPOS] = useState('efectivo');
+  const [nombreFiado, setNombreFiado] = useState('');
   const [verDetalleModal, setVerDetalleModal] = useState(null);
   const [qrGenerado, setQrGenerado] = useState(null);
   const [mostrarEscaner, setMostrarEscaner] = useState(false);
@@ -72,7 +73,7 @@ function App() {
   }, []);
 
   const cargarDatos = async () => {
-    if (!navigator.onLine) return; // Si no hay internet, no recarga para no romper la vista local
+    if (!navigator.onLine) return; 
     const { data: prods } = await supabase.from('bebidas').select('*').order('id');
     if (prods) setBebidas(prods);
     const { data: provs } = await supabase.from('proveedores').select('*').order('id');
@@ -124,7 +125,7 @@ function App() {
     return () => { supabase.removeChannel(radar); };
   }, [user, isOnline]);
 
-  // 🔴 SINCRONIZADOR OFFLINE AUTOMÁTICO (Corre cada 10 seg)
+  // 🔴 SINCRONIZADOR OFFLINE
   useEffect(() => {
     const syncOfflineData = async () => {
       if (!navigator.onLine) return;
@@ -148,17 +149,23 @@ function App() {
 
   const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
   const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + ((c.cantidad||1) * c.costo), 0) - (p.descuento || 0)), 0);
+  
+  // 🟢 LA PLATA FIADA NO SUMA A LA CAJA
   const totalEfecVentas = ventasSesion.filter(v => v.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.total), 0);
   const totalTransfVentas = ventasSesion.filter(v => v.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.total), 0);
+  const totalFiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente').reduce((a, c) => a + Number(c.total), 0);
+
   const totalEfecPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.total), 0);
   const totalTransfPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.total), 0);
   const entradasExtraEfec = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.monto), 0);
   const entradasExtraTransf = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.monto), 0);
   const salidasEfec = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.monto), 0);
   const salidasTransf = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.monto), 0);
+  
   const CAJA_FISICA = totalEfecVentas + totalEfecPuerta + entradasExtraEfec - salidasEfec;
   const CAJA_BANCO = totalTransfVentas + totalTransfPuerta + entradasExtraTransf - salidasTransf;
   const TOTAL_NETO = CAJA_FISICA + CAJA_BANCO;
+  
   const cantGenerales = puertaSesion.filter(p => p.tipo === 'venta' && p.nombre?.includes('General')).reduce((a, c) => a + c.cantidad, 0);
   const cantVips = puertaSesion.filter(p => p.tipo === 'venta' && p.nombre?.includes('VIP')).reduce((a, c) => a + c.cantidad, 0);
   const personasVendidas = cantGenerales + cantVips;
@@ -184,22 +191,26 @@ function App() {
   const eliminarStaff = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Seguro que deseas ELIMINAR al usuario "${nombre}"?`)) { setLoading(true); await supabase.from('cajeros').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
   const sumarCupoStaff = async (id, cupoActual, nombre) => { if(!isOnline) return; const sumar = prompt(`¿Cuántos pases VIP extras le vas a sumar a ${nombre}?`); if (sumar && !isNaN(sumar)) { await supabase.from('cajeros').update({ cupo_listas: cupoActual + Number(sumar) }).eq('id', id); cargarDatos(); } };
 
-  // 🔴 MOTOR DE VENTA BOLETERIA (ONLINE/OFFLINE)
+  // 🔴 COBRAR UNA DEUDA (CUENTA CORRIENTE)
+  const saldarDeuda = async (cliente, tickets, totalDeuda) => {
+    if(!isOnline) return alert("❌ Conéctate a internet para cobrar deudas.");
+    const metodo = prompt(`Cobrar $${totalDeuda} a ${cliente}.\nEscribe "efectivo" o "transferencia":`, "efectivo");
+    if (metodo !== 'efectivo' && metodo !== 'transferencia') return;
+    setLoading(true);
+    for (let id of tickets) {
+      await supabase.from('ventas').update({ metodo_pago: metodo, estado_pago: 'pagado' }).eq('id', id);
+    }
+    await cargarDatos();
+    setLoading(false);
+    alert(`✅ Deuda de ${cliente} saldada. La plata ya sumó en caja.`);
+  };
+
   const venderEntradas = async (e) => { 
     e.preventDefault(); if (!sesionActiva || cantEntradas < 1) return; setLoading(true); 
     const total = cantEntradas * precioActualTaquilla; 
     const nuevaEntrada = { sesion_id: sesionActiva.id, tipo: 'venta', nombre: `Pulsera ${tipoEntradaVenta}`, cantidad: cantEntradas, precio_unitario: precioActualTaquilla, total, metodo_pago: pagoEntrada };
-    
-    if (isOnline) {
-      await supabase.from('puerta').insert([nuevaEntrada]); 
-      await cargarDatos(); 
-      alert(`✅ Venta Exitosa`); 
-    } else {
-      let guardadas = JSON.parse(localStorage.getItem('puertaOffline') || '[]');
-      guardadas.push(nuevaEntrada);
-      localStorage.setItem('puertaOffline', JSON.stringify(guardadas));
-      alert(`✅ Venta GUARDADA OFFLINE (Se subirá sola)`); 
-    }
+    if (isOnline) { await supabase.from('puerta').insert([nuevaEntrada]); await cargarDatos(); alert(`✅ Venta Exitosa`); } 
+    else { let guardadas = JSON.parse(localStorage.getItem('puertaOffline') || '[]'); guardadas.push(nuevaEntrada); localStorage.setItem('puertaOffline', JSON.stringify(guardadas)); alert(`✅ Venta GUARDADA OFFLINE`); }
     setCantEntradas(1); setLoading(false); 
   };
   
@@ -214,25 +225,21 @@ function App() {
     } setLoading(false); 
   };
 
-  // GENERADOR DE IMAGEN (ACTUALIZADO V10.6)
   const descargarInvitacion = (qrData) => { 
     const canvas = document.createElement('canvas'); canvas.width = 1080; canvas.height = 1920; const ctx = canvas.getContext('2d'); 
     const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
     ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
     
-    // FIESTA NOMBRE (Con Max Width de 900px para evitar que salga del recuadro)
     ctx.fillStyle = '#10b981'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; 
     const textoFiesta = `FIESTA: ${sesionActiva?.nombre_fiesta?.toUpperCase() || ''}`;
     ctx.fillText(textoFiesta, 540, 150, 900); 
 
     ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; ctx.fillText('GJBROSS', 540, 250); 
     
-    // TIPO DE PASE (Condicional: ACCESO QR o PASE VIP)
     ctx.fillStyle = '#ffffff'; ctx.font = 'bold 120px sans-serif'; 
     const textoPase = qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR';
     ctx.fillText(textoPase, 540, 420); 
     
-    // TITULAR (Con Max Width para evitar desbordes)
     ctx.fillStyle = '#fbbf24'; ctx.font = '60px sans-serif'; 
     ctx.fillText(qrData.nombre.toUpperCase(), 540, 600, 900); 
     
@@ -256,26 +263,37 @@ function App() {
   const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
   const cambiarCantidad = (id, delta) => setCarrito(prev => prev.map(i => i.id === id ? (i.cantidad + delta > 0 ? { ...i, cantidad: i.cantidad + delta } : null) : i).filter(Boolean));
   
-  // 🔴 MOTOR DE VENTA POS/BARRA (ONLINE/OFFLINE)
+  // 🔴 MOTOR DE VENTA POS/BARRA (EFECTIVO, TRANSF Y FIADOS)
   const procesarVenta = async () => { 
-    if (carrito.length === 0 || !sesionActiva) return; setLoading(true); 
+    if (carrito.length === 0 || !sesionActiva) return; 
+    if (metodoPagoPOS === 'fiado' && !nombreFiado.trim()) return alert("⚠️ Ingresa el nombre de quien saca anotado.");
+    
+    setLoading(true); 
     const totalVenta = carrito.reduce((a, item) => a + (item.precio * item.cantidad), 0); 
-    const nuevaVenta = { cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id };
+    const nuevaVenta = { 
+      cajero: user.usuario, 
+      total: totalVenta, 
+      detalles: carrito, 
+      metodo_pago: metodoPagoPOS, 
+      sesion_id: sesionActiva.id,
+      cliente: metodoPagoPOS === 'fiado' ? nombreFiado.trim() : '',
+      estado_pago: metodoPagoPOS === 'fiado' ? 'pendiente' : 'pagado'
+    };
     
     if (isOnline) {
       const { data: ventaData, error } = await supabase.from('ventas').insert([nuevaVenta]).select().single(); 
       if (!error) { 
         for (const item of carrito) await supabase.from('bebidas').update({ stock: item.stock - item.cantidad }).eq('id', item.id); 
-        setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS }); 
-        setCarrito([]); cargarDatos(); 
+        setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+        setCarrito([]); setNombreFiado(''); cargarDatos(); 
       } 
     } else {
       let guardadas = JSON.parse(localStorage.getItem('ventasOffline') || '[]');
       guardadas.push(nuevaVenta);
       localStorage.setItem('ventasOffline', JSON.stringify(guardadas));
       setBebidas(prev => prev.map(b => { const itemCar = carrito.find(c => c.id === b.id); return itemCar ? { ...b, stock: b.stock - itemCar.cantidad } : b; }));
-      setTicketActual({ tipo: 'venta', id: "OFF-" + Date.now().toString().slice(-4), fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS }); 
-      setCarrito([]); 
+      setTicketActual({ tipo: 'venta', id: "OFF-" + Date.now().toString().slice(-4), fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+      setCarrito([]); setNombreFiado('');
     }
     setLoading(false); 
   };
@@ -295,7 +313,7 @@ function App() {
     let conteoProductos = {}; ventasSesion.forEach(v => { v.detalles.forEach(item => { if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0; conteoProductos[item.nombre] += item.cantidad; }); }); 
     const resumenCierre = { estado: 'cerrada', cerrada_por: user.usuario, fecha_cierre: new Date().toISOString(), recaudacion_efectivo: CAJA_FISICA, recaudacion_transf: CAJA_BANCO, total_salidas: movsSesion.filter(m=>m.tipo==='salida').reduce((a,c)=>a+Number(c.monto),0), total_ingresos: movsSesion.filter(m=>m.tipo==='entrada').reduce((a,c)=>a+Number(c.monto),0), ranking_ventas: conteoProductos, personas_vendidas: personasVendidas, personas_lista: personasListaIngresadas }; 
     await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id); 
-    setTicketActual({ tipo: 'cierre', fiesta: sesionActiva.nombre_fiesta, fecha: new Date().toLocaleDateString(), hora: new Date().toLocaleTimeString(), responsable: user.usuario, ventas_efectivo: totalEfecVentas, ventas_transf: totalTransfVentas, puerta_efectivo: totalEfecPuerta, puerta_transf: totalTransfPuerta, salidas_efec: salidasEfec, salidas_transf: salidasTransf, entradas_efec: entradasExtraEfec, entradas_transf: entradasExtraTransf, cant_generales: cantGenerales, cant_vips: cantVips, ...resumenCierre }); 
+    setTicketActual({ tipo: 'cierre', fiesta: sesionActiva.nombre_fiesta, fecha: new Date().toLocaleDateString(), hora: new Date().toLocaleTimeString(), responsable: user.usuario, ventas_efectivo: totalEfecVentas, ventas_transf: totalTransfVentas, puerta_efectivo: totalEfecPuerta, puerta_transf: totalTransfPuerta, salidas_efec: salidasEfec, salidas_transf: salidasTransf, entradas_efec: entradasExtraEfec, entradas_transf: entradasExtraTransf, cant_generales: cantGenerales, cant_vips: cantVips, fiados_pendientes: totalFiadosPendientes, ...resumenCierre }); 
     setSesionActiva(null); setVista('admin'); setLoading(false); 
   };
 
@@ -339,7 +357,6 @@ function App() {
     </header>
   );
 
-  // VISTA TICKET OPTIMIZADA + AUTO CIERRE
   if (ticketActual) {
     return (
       <div className="min-h-screen bg-black text-white p-6 flex flex-col items-center justify-center print:bg-white print:text-black print:min-h-0 print:p-0 print:block">
@@ -351,14 +368,12 @@ function App() {
             <>
               <div className="text-left text-xs mb-2 mt-4 print:mt-2"><p><b>Ticket:</b> #{ticketActual.id}</p><p><b>Cajero:</b> {ticketActual.cajero}</p><p><b>Hora:</b> {ticketActual.fecha}</p></div>
               <hr className="my-2 border-dashed border-gray-400 print:my-1" />
-              <div className="text-left space-y-1 print:space-y-0">
-                {ticketActual.items.map((it) => (
-                  <div key={it.id} className="flex justify-between text-sm print:text-xs"><span>{it.cantidad}x {it.nombre}</span><span>${it.precio * it.cantidad}</span></div>
-                ))}
-              </div>
+              <div className="text-left space-y-1 print:space-y-0">{ticketActual.items.map((it) => (<div key={it.id} className="flex justify-between text-sm print:text-xs"><span>{it.cantidad}x {it.nombre}</span><span>${it.precio * it.cantidad}</span></div>))}</div>
               <hr className="my-2 border-dashed border-gray-400 print:my-1" />
               <h3 className="text-2xl font-black text-right print:text-lg">TOTAL: ${ticketActual.total}</h3>
-              <p className="text-xs text-center mt-2 font-bold bg-black text-white py-1 uppercase border border-dashed print:bg-white print:text-black print:mt-1 print:border-black">METODO: {ticketActual.metodo_pago}</p>
+              <p className={`text-xs text-center mt-2 font-bold py-1 uppercase border border-dashed print:mt-1 print:border-black ${ticketActual.metodo_pago === 'fiado' ? 'bg-red-600 text-white print:bg-white print:text-black' : 'bg-black text-white print:bg-white print:text-black'}`}>
+                METODO: {ticketActual.metodo_pago} {ticketActual.cliente ? `(${ticketActual.cliente})` : ''}
+              </p>
             </>
           ) : (
             <>
@@ -374,6 +389,7 @@ function App() {
               <hr className="border-black my-2 print:my-1" />
               <div className="text-left text-xs space-y-1 print:space-y-0">
                 <div className="flex justify-between font-bold"><span>Total Ventas:</span><span>${ticketActual.ventas_efectivo + ticketActual.ventas_transf + ticketActual.puerta_efectivo + ticketActual.puerta_transf}</span></div>
+                <div className="flex justify-between text-yellow-600 print:text-black"><span>Fiados (Sin cobrar):</span><span>${ticketActual.fiados_pendientes}</span></div>
                 <div className="flex justify-between text-green-600 print:text-black"><span>Entradas extra:</span><span>+${ticketActual.entradas_efec + ticketActual.entradas_transf}</span></div>
                 <div className="flex justify-between text-red-600 print:text-black"><span>Salidas caja:</span><span>-${ticketActual.salidas_efec + ticketActual.salidas_transf}</span></div>
               </div>
@@ -404,15 +420,37 @@ function App() {
     );
   };
 
+  // VISTA ADMIN DASHBOARD (AHORA CON 5 COLUMNAS Y DEUDORES)
   if (vista === 'admin') {
+    
+    // Lógica para agrupar deudores
+    const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
+    const deudores = fiadosPendientes.reduce((acc, v) => {
+      if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] };
+      acc[v.cliente].total += Number(v.total);
+      acc[v.cliente].tickets.push(v.id);
+      acc[v.cliente].items.push(...v.detalles);
+      return acc;
+    }, {});
+
     if (!sesionActiva) return (<div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading || !isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] disabled:opacity-50">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>);
 
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
         {renderDetallesModal()}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6"><div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2><p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p></div><div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2><p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2><p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda Proveedores</h2><p className="text-3xl font-black text-orange-400">${deudaProveedores}</p></div></div>
+        
+        {/* METRICAS PRINCIPALES AHORA INCLUYEN CUENTAS POR COBRAR */}
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+          <div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2><p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p></div>
+          <div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2><p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div>
+          <div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2><p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div>
+          <div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda Proveedores</h2><p className="text-3xl font-black text-orange-400">${deudaProveedores}</p></div>
+          <div className="bg-red-900/30 p-5 rounded-2xl border border-red-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Cuentas x Cobrar</h2><p className="text-3xl font-black text-red-400">${totalFiadosPendientes}</p></div>
+        </div>
+        
         <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-6 flex justify-between items-center shadow-lg"><div><h2 className="text-sm font-bold text-gray-400 uppercase mb-1">🎟️ Ventas Boletería</h2><p className="text-sm text-white"><span className="text-indigo-400 font-black">{cantGenerales}</span> Generales | <span className="text-purple-400 font-black">{cantVips}</span> VIPs</p></div><div className="text-right"><p className="text-xs text-gray-500 uppercase">Recaudado Taquilla</p><p className="text-2xl font-black text-green-400">${totalEfecPuerta + totalTransfPuerta}</p></div></div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="space-y-6">
             <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex justify-between items-center">👑 Monitor Puerta <span className="text-xs bg-green-900/40 text-green-400 px-2 py-1 rounded">Adentro: {personasListaIngresadas}</span></h2><div className="max-h-[200px] overflow-y-auto custom-scrollbar space-y-2">{listasVip.filter(l => l.ingresados > 0).length === 0 ? <p className="text-gray-500 text-sm">Nadie ha ingresado por QR aún.</p> : listasVip.filter(l => l.ingresados > 0).map(l => (<div key={l.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded-lg border border-gray-600"><span className="font-bold text-white text-sm">{l.nombre}</span><span className="font-black text-green-400 text-xs">+{l.ingresados} Adentro</span></div>))}</div></div>
@@ -433,7 +471,29 @@ function App() {
           </div>
           
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl space-y-6">
-            <div className="flex justify-between items-center"><h2 className="text-lg font-black uppercase text-white">📦 Base de Datos (Menú)</h2><div className="text-right"><p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p><p className="text-xl font-black text-green-400">${capitalEnBarra}</p></div></div>
+            
+            {/* 🔴 NUEVO: PANEL DE CUENTAS CORRIENTES */}
+            <div className="bg-gray-900 p-6 rounded-2xl border border-red-900">
+              <h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>
+              {Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                  {Object.entries(deudores).map(([cliente, data]) => (
+                    <div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span>
+                          <span className="font-black text-red-400 text-xl">-${data.total}</span>
+                        </div>
+                        <p className="text-xs text-gray-400 italic mb-4 line-clamp-2">{data.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p>
+                      </div>
+                      <button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+
+            <div className="flex justify-between items-center mt-6"><h2 className="text-lg font-black uppercase text-white">📦 Base de Datos (Menú)</h2><div className="text-right"><p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p><p className="text-xl font-black text-green-400">${capitalEnBarra}</p></div></div>
             <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 bg-gray-700/50 p-3 rounded-xl border border-gray-600"><input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required /><input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required /><input type="number" placeholder="Stock" className="w-full sm:w-20 bg-gray-800 p-2 rounded text-sm" value={nuevoStock} onChange={e => setNuevoStock(e.target.value)} required /><select className="w-full sm:w-28 bg-gray-800 p-2 rounded text-sm" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)}><option value="bebida">Bebida</option><option value="combo">Combo</option><option value="entrada">Entrada</option></select><button type="submit" disabled={!isOnline} className="bg-purple-600 px-4 py-2 rounded font-bold text-sm disabled:opacity-50">+</button></form>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-[300px] overflow-y-auto pr-2 custom-scrollbar">{bebidas.map(b => (<div key={b.id} className={`p-4 rounded-xl border relative ${b.stock < 10 ? 'bg-red-900/10 border-red-900' : 'bg-gray-700/30 border-gray-600'}`}><button type="button" onClick={() => eliminarProducto(b.id, b.nombre)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 text-lg">❌</button><p className="font-bold text-sm mb-1 pr-6">{b.nombre}</p><div className="flex justify-between items-center mb-3"><span className="text-green-400 font-black text-lg">${b.precio}</span><span className={`font-bold text-xs bg-gray-800 px-2 py-1 rounded ${b.stock < 10 ? 'text-red-400' : 'text-gray-300'}`}>Stock: {b.stock}</span></div><div className="flex space-x-2"><button type="button" onClick={async () => { const n = prompt('Nuevo precio:', b.precio); if (n) { await supabase.from('bebidas').update({precio:Number(n)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-gray-600 py-2 rounded text-xs font-bold uppercase">Cambiar $</button><button type="button" onClick={async () => { const s = prompt(`Stock exacto:`, b.stock); if (s !== null && !isNaN(s)) { await supabase.from('bebidas').update({stock:Number(s)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-blue-600 py-2 rounded text-xs font-bold uppercase">Mod. Stock</button></div></div>))}</div>
             <div className="bg-gray-900 p-6 rounded-2xl border border-gray-700"><h2 className="text-lg font-black mb-4 uppercase text-yellow-400 flex items-center">💵 Registrar Movimiento</h2><form onSubmit={registrarMovimiento} className="space-y-3"><select className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={movTipo} onChange={e => setMovTipo(e.target.value)}><option value="salida">🔴 Salida (Gasto)</option><option value="entrada">🟢 Ingreso Extra</option></select><input type="text" placeholder="Concepto" className="w-full bg-gray-700 p-3 rounded-lg" value={movConcepto} onChange={e => setMovConcepto(e.target.value)} required /><div className="flex space-x-2"><input type="number" placeholder="Monto $" className="w-2/3 bg-gray-700 p-3 rounded-lg font-bold" value={movMonto} onChange={e => setMovMonto(e.target.value)} required /><select className="w-1/3 bg-gray-700 p-3 rounded-lg text-sm" value={movMetodo} onChange={e => setMovMetodo(e.target.value)}><option value="efectivo">Efectivo</option><option value="transferencia">Transf</option></select></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-yellow-600 text-black py-3 rounded-lg font-black uppercase disabled:opacity-50">Registrar</button></form></div>
@@ -443,43 +503,7 @@ function App() {
     );
   }
 
-  // VISTA PUERTA / QR
-  if (vista === 'puerta' || user.rol === 'puerta') {
-    const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
-        {barraHeader}
-        {mostrarEscaner && (<div className="fixed inset-0 bg-black z-[100] flex flex-col"><div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8"><h2 className="text-xl font-black text-purple-400 tracking-widest">ESCANEAR PASE VIP</h2><button onClick={() => setMostrarEscaner(false)} className="text-red-500 font-black text-lg bg-gray-800 px-4 py-2 rounded-lg">CERRAR ✖</button></div><div className="flex-1 w-full flex items-center justify-center bg-black p-4"><div className="w-full max-w-sm rounded-3xl overflow-hidden border-4 border-purple-500 shadow-[0_0_40px_rgba(147,51,234,0.4)] relative"><Scanner onScan={(r) => { if(!r) return; const txt = Array.isArray(r)?r[0].rawValue:(r.text||r); if(txt) procesarEscaneoAutomatico(txt); }} onError={console.log} /><div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none"></div></div></div><div className="p-8 bg-gray-900 text-center pb-12"><p className="text-gray-400 text-sm font-bold uppercase tracking-widest">Apunta la cámara al código</p></div></div>)}
-        {qrGenerado && (<div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"><div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden"><div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div><h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2><p className="text-purple-600 font-black uppercase text-sm mb-6">{sesionActiva?.nombre_fiesta}</p><div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6"><p className="font-black text-2xl text-black uppercase">{qrGenerado.nombre}</p><p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR'} ({qrGenerado.cantidad} pers)</p></div><button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button><button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button></div></div>)}
-        {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2></div>) : (
-          <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {(user.rol === 'admin' || user.rol === 'puerta') && (
-              <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit"><div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div><h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>{user.rol === 'puerta' ? <p className="text-sm font-bold text-yellow-400 bg-yellow-900/30 p-2 rounded-lg mb-6 border border-yellow-800">🎟️ TU CUPO DISPONIBLE: {user.cupo_listas} Pases</p> : <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>}<form onSubmit={generarQRLista} className="space-y-6 relative z-10"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button><button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP / Accesos</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Gabriel Roa" /></div><div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4 disabled:opacity-50">Generar Pase ✨</button></form></div>
-            )}
-            <div className={`space-y-6 ${user.rol === 'puerta' ? 'lg:col-span-2 max-w-xl mx-auto w-full' : ''}`}>
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl"><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">Gratis (Adentro)</p><p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p></div><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">QRs Activos</p><p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p></div></div>
-              <div className="flex gap-3"><div className="relative flex-1"><input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} /><span className="absolute left-4 top-4 text-xl">🔍</span></div><button onClick={() => setMostrarEscaner(true)} disabled={!isOnline} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center disabled:opacity-50">📷</button></div>
-              <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl h-[60vh] flex flex-col"><h2 className="text-xl font-black uppercase text-white mb-4 border-b border-gray-700 pb-2">📋 Listas y Accesos</h2><div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">{listasFiltradas.length === 0 ? <p className="text-center text-gray-500 py-10 font-bold uppercase">No hay pases generados.</p> : listasFiltradas.map(l => (<div key={l.id} className={`p-5 rounded-2xl border-2 transition ${l.estado === 'ingresado' ? 'bg-green-900/10 border-green-900/50 opacity-50' : 'bg-gray-800 border-gray-600 shadow-lg'}`}><div className="flex justify-between items-start"><div><p className="font-black text-lg uppercase text-white leading-tight">{l.nombre}</p><p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">{l.tipo_pase} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span></p><p className="text-sm text-blue-400 font-bold mt-2">Ingresados: {l.ingresados || 0} / {l.cantidad}</p></div>{user.rol === 'admin' && (<button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg shadow transition">⬇️ QR</button>)}</div>{l.estado === 'ingresado' ? (<div className="mt-3 text-center bg-green-900/40 py-2 rounded-lg"><span className="text-green-500 font-black text-sm uppercase">✅ Completado</span></div>) : (<button onClick={() => procesarEscaneoAutomatico(l.codigo)} disabled={!isOnline} className="w-full mt-3 bg-purple-600 hover:bg-purple-500 py-3 rounded-xl font-black text-sm uppercase shadow-lg active:scale-95 transition disabled:opacity-50">Ingreso Parcial (+ Personas)</button>)}</div>))}</div></div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // VISTA BOLETERIA
-  if (vista === 'boleteria' || user.rol === 'boleteria') {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
-        {barraHeader}
-        {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>) : (
-          <div className="max-w-md mx-auto w-full mt-4 bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl"><h2 className="text-3xl font-black uppercase text-center text-indigo-400 mb-8 tracking-widest">🎟️ TAQUILLA</h2><form onSubmit={venderEntradas} className="space-y-6"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Tipo de Pulsera</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoEntradaVenta('General')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'General' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>General</button><button type="button" onClick={() => setTipoEntradaVenta('VIP')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'VIP' ? 'bg-purple-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>Pase VIP</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Precio Unitario Oficial ($)</label><div className="w-full bg-gray-900 p-4 rounded-xl font-black text-2xl text-center text-gray-300 border border-gray-700">${precioActualTaquilla}</div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Cantidad a Vender</label><div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantEntradas(Math.max(1, cantEntradas - 1))} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-3xl focus:outline-none" value={cantEntradas} readOnly /><button type="button" onClick={() => setCantEntradas(cantEntradas + 1)} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">+</button></div></div><div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Cobrar</span><span className="text-5xl font-black text-green-400">${cantEntradas * precioActualTaquilla}</span></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Método de Pago</label><div className="flex space-x-2"><button type="button" onClick={() => setPagoEntrada('efectivo')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'efectivo' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>💵 Efectivo</button><button type="button" onClick={() => setPagoEntrada('transferencia')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'transferencia' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>📱 Transf</button></div></div><button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-6 rounded-xl font-black text-2xl uppercase shadow-[0_0_20px_rgba(34,197,94,0.4)] active:scale-95 transition">✅ COBRAR</button></form></div>
-        )}
-      </div>
-    );
-  }
-
-  // DEFAULT VIEW: POS BARRA
+  // DEFAULT VIEW: POS BARRA (AHORA CON BOTÓN ANOTAR)
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {barraHeader}
@@ -490,7 +514,22 @@ function App() {
           <div className="lg:col-span-2 space-y-3"><div className="grid grid-cols-2 sm:grid-cols-3 gap-2 lg:gap-3">{bebidas.map((item) => (<button type="button" key={item.id} onClick={() => agregarAlCarrito(item)} className={`p-3 lg:p-4 rounded-xl border text-left flex flex-col justify-between transition active:scale-95 ${item.stock > 0 ? 'bg-gray-800 border-gray-700 hover:border-purple-500' : 'bg-gray-800/40 border-gray-800 opacity-50'}`}><div><span className="text-[10px] font-black uppercase text-purple-500 block mb-1">{item.categoria}</span><p className="font-bold text-xs lg:text-sm line-clamp-2 leading-tight">{item.nombre}</p></div><div className="mt-2 flex justify-between items-end"><span className="text-base lg:text-lg font-black text-green-400">${item.precio}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${item.stock < 10 ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Stk: {item.stock}</span></div></button>))}</div></div>
           <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col justify-between h-[450px] lg:h-auto shadow-2xl">
             <div><h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2>{carrito.length === 0 ? (<div className="text-center py-10 text-gray-600"><p className="text-4xl mb-2">🍹</p><p className="text-xs font-bold uppercase">Toque productos para agregar</p></div>) : (<div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">{carrito.map((item) => (<div key={item.id} className="flex items-center justify-between bg-gray-700/40 p-2 rounded-lg border border-gray-600"><div className="flex-1 mr-2"><p className="font-bold text-xs line-clamp-1">{item.nombre}</p><p className="text-xs text-green-400 font-black">${item.precio * item.cantidad}</p></div><div className="flex items-center space-x-1"><button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button><span className="font-black text-sm w-4 text-center">{item.cantidad}</span><button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button></div></div>))}</div>)}</div>
-            <div className="pt-2"><div className="flex justify-between items-end mb-3"><span className="text-gray-400 uppercase text-xs font-bold">Total a Pagar</span><span className="text-3xl font-black text-green-400 leading-none">${carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0)}</span></div><div className="flex space-x-2 mb-3"><button type="button" onClick={() => setMetodoPagoPOS('efectivo')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'efectivo' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>💵 Efectivo</button><button type="button" onClick={() => setMetodoPagoPOS('transferencia')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'transferencia' ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📱 Transf</button></div><button type="button" onClick={procesarVenta} disabled={carrito.length === 0 || loading} className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white font-black py-4 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.3)] transition active:scale-95 text-lg uppercase tracking-widest">{loading ? '...' : 'COBRAR'}</button></div>
+            <div className="pt-2">
+              <div className="flex justify-between items-end mb-3"><span className="text-gray-400 uppercase text-xs font-bold">Total a Pagar</span><span className="text-3xl font-black text-green-400 leading-none">${carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0)}</span></div>
+              
+              {/* SELECTOR DE PAGO CON OPCIÓN "ANOTAR" */}
+              <div className="flex space-x-2 mb-3">
+                <button type="button" onClick={() => setMetodoPagoPOS('efectivo')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'efectivo' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>💵 Efec</button>
+                <button type="button" onClick={() => setMetodoPagoPOS('transferencia')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'transferencia' ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📱 Trans</button>
+                <button type="button" onClick={() => setMetodoPagoPOS('fiado')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'fiado' ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📝 Anotar</button>
+              </div>
+
+              {metodoPagoPOS === 'fiado' && (
+                <input type="text" placeholder="Nombre de quien saca anotado..." className="w-full mb-3 bg-gray-900 border border-gray-700 p-3 rounded-xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-red-500 text-center uppercase" value={nombreFiado} onChange={e => setNombreFiado(e.target.value)} required />
+              )}
+
+              <button type="button" onClick={procesarVenta} disabled={carrito.length === 0 || loading} className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white font-black py-4 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.3)] transition active:scale-95 text-lg uppercase tracking-widest">{loading ? '...' : 'COBRAR'}</button>
+            </div>
           </div>
         </div>
       )}
