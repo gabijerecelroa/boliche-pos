@@ -131,7 +131,23 @@ function App() {
       
       if (vOffline.length > 0) {
         const { error } = await supabase.from('ventas').insert(vOffline);
-        if (!error) { localStorage.setItem('ventasOffline', '[]'); synced = true; }
+        if (!error) { 
+          let itemsVendidos = {};
+          vOffline.forEach(venta => {
+            venta.detalles.forEach(item => {
+              if (!itemsVendidos[item.id]) itemsVendidos[item.id] = 0;
+              itemsVendidos[item.id] += item.cantidad;
+            });
+          });
+          for (const id of Object.keys(itemsVendidos)) {
+            const { data: drink } = await supabase.from('bebidas').select('stock').eq('id', id).single();
+            if (drink) {
+              await supabase.from('bebidas').update({ stock: drink.stock - itemsVendidos[id] }).eq('id', id);
+            }
+          }
+          localStorage.setItem('ventasOffline', '[]'); 
+          synced = true; 
+        }
       }
       if (pOffline.length > 0) {
         const { error } = await supabase.from('puerta').insert(pOffline);
@@ -240,7 +256,19 @@ function App() {
   
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
-    setMostrarEscaner(false); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === textoCodigo.toUpperCase()); if (!listaEncontrada) return alert('❌ CÓDIGO INVÁLIDO O INEXISTENTE.'); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(textoCodigo); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0 }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+    setMostrarEscaner(false); 
+    const codigoLimpio = textoCodigo.trim().toUpperCase();
+    const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); 
+    if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); 
+    if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } 
+    const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; 
+    const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); 
+    if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); 
+    if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } 
+    setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; 
+    await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); 
+    await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0 }]); 
+    setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
   };
 
   const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
@@ -360,7 +388,6 @@ function App() {
     );
   };
 
-  // 1️⃣ VISTA ADMIN DASHBOARD
   if (vista === 'admin') {
     const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
     const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles); return acc; }, {});
@@ -390,13 +417,38 @@ function App() {
     );
   }
 
-  // 2️⃣ VISTA PUERTA / QR
   if (vista === 'puerta' || user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
         {barraHeader}
-        {mostrarEscaner && (<div className="fixed inset-0 bg-black z-[100] flex flex-col"><div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8"><h2 className="text-xl font-black text-purple-400 tracking-widest">ESCANEAR PASE VIP</h2><button onClick={() => setMostrarEscaner(false)} className="text-red-500 font-black text-lg bg-gray-800 px-4 py-2 rounded-lg">CERRAR ✖</button></div><div className="flex-1 w-full flex items-center justify-center bg-black p-4"><div className="w-full max-w-sm rounded-3xl overflow-hidden border-4 border-purple-500 shadow-[0_0_40px_rgba(147,51,234,0.4)] relative"><Scanner onScan={(r) => { if(!r) return; const txt = Array.isArray(r)?r[0].rawValue:(r.text||r); if(txt) procesarEscaneoAutomatico(txt); }} onError={console.log} /><div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none"></div></div></div><div className="p-8 bg-gray-900 text-center pb-12"><p className="text-gray-400 text-sm font-bold uppercase tracking-widest">Apunta la cámara al código</p></div></div>)}
+        {mostrarEscaner && (
+          <div className="fixed inset-0 bg-black z-[100] flex flex-col">
+            <div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8">
+              <h2 className="text-xl font-black text-purple-400 tracking-widest">ESCANEAR PASE VIP</h2>
+              <button onClick={() => setMostrarEscaner(false)} className="text-red-500 font-black text-lg bg-gray-800 px-4 py-2 rounded-lg">CERRAR ✖</button>
+            </div>
+            <div className="flex-1 w-full flex items-center justify-center bg-black p-4">
+              <div className="w-full max-w-sm rounded-3xl overflow-hidden border-4 border-purple-500 shadow-[0_0_40px_rgba(147,51,234,0.4)] relative">
+                <Scanner 
+                  onScan={(r) => { 
+                    if(!r) return; 
+                    let txt = '';
+                    if (Array.isArray(r)) { txt = r[0]?.rawValue || ''; }
+                    else if (r?.text) { txt = r.text; }
+                    else if (typeof r === 'string') { txt = r; }
+                    if(txt.trim()) procesarEscaneoAutomatico(txt.trim()); 
+                  }} 
+                  onError={(e) => console.log('Error Escaner:', e)} 
+                />
+                <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none"></div>
+              </div>
+            </div>
+            <div className="p-8 bg-gray-900 text-center pb-12">
+              <p className="text-gray-400 text-sm font-bold uppercase tracking-widest">Apunta la cámara al código</p>
+            </div>
+          </div>
+        )}
         {qrGenerado && (<div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"><div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden"><div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div><h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2><p className="text-purple-600 font-black uppercase text-sm mb-6">{sesionActiva?.nombre_fiesta}</p><div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6"><p className="font-black text-2xl text-black uppercase">{qrGenerado.nombre}</p><p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR'} ({qrGenerado.cantidad} pers)</p></div><button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button><button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button></div></div>)}
         {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2></div>) : (
           <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -414,7 +466,6 @@ function App() {
     );
   }
 
-  // 3️⃣ VISTA BOLETERIA
   if (vista === 'boleteria' || user.rol === 'boleteria') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
@@ -426,7 +477,6 @@ function App() {
     );
   }
 
-  // 4️⃣ VISTA PROVEEDORES
   if (vista === 'proveedores') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
@@ -449,7 +499,6 @@ function App() {
     );
   }
 
-  // 5️⃣ DEFAULT VIEW: POS BARRA 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {barraHeader}
