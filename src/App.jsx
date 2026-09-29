@@ -133,20 +133,9 @@ function App() {
         const { error } = await supabase.from('ventas').insert(vOffline);
         if (!error) { 
           let itemsVendidos = {};
-          vOffline.forEach(venta => {
-            venta.detalles.forEach(item => {
-              if (!itemsVendidos[item.id]) itemsVendidos[item.id] = 0;
-              itemsVendidos[item.id] += item.cantidad;
-            });
-          });
-          for (const id of Object.keys(itemsVendidos)) {
-            const { data: drink } = await supabase.from('bebidas').select('stock').eq('id', id).single();
-            if (drink) {
-              await supabase.from('bebidas').update({ stock: drink.stock - itemsVendidos[id] }).eq('id', id);
-            }
-          }
-          localStorage.setItem('ventasOffline', '[]'); 
-          synced = true; 
+          vOffline.forEach(venta => { venta.detalles.forEach(item => { if (!itemsVendidos[item.id]) itemsVendidos[item.id] = 0; itemsVendidos[item.id] += item.cantidad; }); });
+          for (const id of Object.keys(itemsVendidos)) { const { data: drink } = await supabase.from('bebidas').select('stock').eq('id', id).single(); if (drink) { await supabase.from('bebidas').update({ stock: drink.stock - itemsVendidos[id] }).eq('id', id); } }
+          localStorage.setItem('ventasOffline', '[]'); synced = true; 
         }
       }
       if (pOffline.length > 0) {
@@ -214,7 +203,8 @@ function App() {
   const venderEntradas = async (e) => { 
     e.preventDefault(); if (!sesionActiva || cantEntradas < 1) return; setLoading(true); 
     const total = cantEntradas * precioActualTaquilla; 
-    const nuevaEntrada = { sesion_id: sesionActiva.id, tipo: 'venta', nombre: `Pulsera ${tipoEntradaVenta}`, cantidad: cantEntradas, precio_unitario: precioActualTaquilla, total, metodo_pago: pagoEntrada };
+    const horaTicket = new Date().toLocaleTimeString();
+    const nuevaEntrada = { sesion_id: sesionActiva.id, tipo: 'venta', nombre: `Pulsera ${tipoEntradaVenta}`, cantidad: cantEntradas, precio_unitario: precioActualTaquilla, total, metodo_pago: pagoEntrada, hora: horaTicket };
     if (isOnline) { await supabase.from('puerta').insert([nuevaEntrada]); await cargarDatos(); alert(`✅ Venta Exitosa`); } 
     else { let guardadas = JSON.parse(localStorage.getItem('puertaOffline') || '[]'); guardadas.push(nuevaEntrada); localStorage.setItem('puertaOffline', JSON.stringify(guardadas)); alert(`✅ Venta GUARDADA OFFLINE`); }
     setCantEntradas(1); setLoading(false); 
@@ -224,7 +214,11 @@ function App() {
     e.preventDefault(); if (!sesionActiva || !nombreLista || cantLista < 1) return; 
     if(!isOnline) return alert("❌ Sin internet no puedes crear QRs.");
     if (user.rol === 'puerta') { if (user.cupo_listas < cantLista) return alert(`❌ CUPO INSUFICIENTE.\nTe quedan ${user.cupo_listas} lugares pero intentas meter a ${cantLista}.`); }
-    setLoading(true); const prefijo = tipoPaseQr === 'vip' ? 'VIP-' : 'GEN-'; const codigo = prefijo + Math.random().toString(36).substr(2, 5).toUpperCase(); const { error } = await supabase.from('listas_vip').insert([{ sesion_id: sesionActiva.id, nombre: nombreLista, cantidad: cantLista, ingresados: 0, codigo, tipo_pase: tipoPaseQr }]); 
+    setLoading(true); 
+    const prefijo = tipoPaseQr === 'vip' ? 'VIP-' : 'GEN-'; 
+    const codigo = prefijo + Math.random().toString(36).substr(2, 5).toUpperCase(); 
+    const hora_creacion = new Date().toLocaleTimeString();
+    const { error } = await supabase.from('listas_vip').insert([{ sesion_id: sesionActiva.id, nombre: nombreLista, cantidad: cantLista, ingresados: 0, codigo, tipo_pase: tipoPaseQr, creado_por: user.usuario, hora_creacion }]); 
     if (!error) { 
       if (user.rol === 'puerta') await supabase.from('cajeros').update({ cupo_listas: user.cupo_listas - cantLista }).eq('id', user.id);
       setQrGenerado({ nombre: nombreLista, cantidad: cantLista, codigo, tipo_pase: tipoPaseQr }); setNombreLista(''); setCantLista(1); await cargarDatos(); 
@@ -256,19 +250,7 @@ function App() {
   
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
-    setMostrarEscaner(false); 
-    const codigoLimpio = textoCodigo.trim().toUpperCase();
-    const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); 
-    if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); 
-    if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } 
-    const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; 
-    const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); 
-    if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); 
-    if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } 
-    setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; 
-    await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); 
-    await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0 }]); 
-    setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
   };
 
   const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
@@ -279,18 +261,19 @@ function App() {
     if (metodoPagoPOS === 'fiado' && !nombreFiado.trim()) return alert("⚠️ Ingresa el nombre de quien saca anotado.");
     setLoading(true); 
     const totalVenta = carrito.reduce((a, item) => a + (item.precio * item.cantidad), 0); 
-    const nuevaVenta = { cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id, cliente: metodoPagoPOS === 'fiado' ? nombreFiado.trim() : '', estado_pago: metodoPagoPOS === 'fiado' ? 'pendiente' : 'pagado' };
+    const horaVenta = new Date().toLocaleTimeString();
+    const nuevaVenta = { cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id, cliente: metodoPagoPOS === 'fiado' ? nombreFiado.trim() : '', estado_pago: metodoPagoPOS === 'fiado' ? 'pendiente' : 'pagado', hora: horaVenta };
     if (isOnline) {
       const { data: ventaData, error } = await supabase.from('ventas').insert([nuevaVenta]).select().single(); 
       if (!error) { 
         for (const item of carrito) await supabase.from('bebidas').update({ stock: item.stock - item.cantidad }).eq('id', item.id); 
-        setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+        setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: horaVenta, items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
         setCarrito([]); setNombreFiado(''); cargarDatos(); 
       } 
     } else {
       let guardadas = JSON.parse(localStorage.getItem('ventasOffline') || '[]'); guardadas.push(nuevaVenta); localStorage.setItem('ventasOffline', JSON.stringify(guardadas));
       setBebidas(prev => prev.map(b => { const itemCar = carrito.find(c => c.id === b.id); return itemCar ? { ...b, stock: b.stock - itemCar.cantidad } : b; }));
-      setTicketActual({ tipo: 'venta', id: "OFF-" + Date.now().toString().slice(-4), fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: new Date().toLocaleTimeString(), items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+      setTicketActual({ tipo: 'venta', id: "OFF-" + Date.now().toString().slice(-4), fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: horaVenta, items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
       setCarrito([]); setNombreFiado('');
     }
     setLoading(false); 
@@ -325,7 +308,7 @@ function App() {
   const pendingCount = (JSON.parse(localStorage.getItem('ventasOffline')||'[]').length) + (JSON.parse(localStorage.getItem('puertaOffline')||'[]').length);
 
   const barraHeader = (
-    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3 shadow-lg print:hidden">
+    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3 shadow-lg print:hidden shrink-0">
       <div className="flex flex-col items-center md:items-start w-full md:w-auto">
         <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
         <div className="flex items-center gap-2 mt-1">
@@ -383,14 +366,15 @@ function App() {
     if (!verDetalleModal) return null;
     return (
       <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col"><h2 className="text-xl font-black uppercase mb-4 text-purple-400 border-b border-gray-700 pb-2">{verDetalleModal === 'entrada' ? 'Ingresos Extra' : verDetalleModal === 'salida' ? 'Salidas y Gastos' : verDetalleModal === 'ventas_efectivo' ? 'Ventas en Efectivo' : 'Ventas por Transferencia'}</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{(() => { let datos = []; let esVenta = false; if (verDetalleModal === 'entrada') datos = movsSesion.filter(m => m.tipo === 'entrada'); else if (verDetalleModal === 'salida') datos = movsSesion.filter(m => m.tipo === 'salida'); else if (verDetalleModal === 'ventas_efectivo') { datos = ventasSesion.filter(v => v.metodo_pago === 'efectivo'); esVenta = true; } else if (verDetalleModal === 'ventas_transferencia') { datos = ventasSesion.filter(v => v.metodo_pago === 'transferencia'); esVenta = true; } if (datos.length === 0) return <p className="text-gray-500 text-center py-4">No hay registros.</p>; return datos.map(d => (<div key={d.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center text-sm border border-gray-600"><div className="flex-1 pr-2">{esVenta ? (<><p className="font-bold text-xs text-gray-300">Ticket #{d.id} - Cajero: {d.cajero}</p><p className="text-xs text-gray-400 italic line-clamp-1">{d.detalles.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p></>) : (<><p className="font-bold text-sm text-white">{d.concepto}</p><p className="text-xs text-gray-400 uppercase">Vía: {d.metodo_pago}</p></>)}</div><span className={`font-black text-lg ${verDetalleModal === 'salida' ? 'text-red-400' : 'text-green-400'}`}>${esVenta ? d.total : d.monto}</span></div>)); })()}</div><button onClick={() => setVerDetalleModal(null)} className="mt-6 bg-gray-600 hover:bg-gray-500 py-3 rounded-lg font-bold w-full uppercase">Cerrar Detalle</button></div>
+        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col"><h2 className="text-xl font-black uppercase mb-4 text-purple-400 border-b border-gray-700 pb-2">{verDetalleModal === 'entrada' ? 'Ingresos Extra' : verDetalleModal === 'salida' ? 'Salidas y Gastos' : verDetalleModal === 'ventas_efectivo' ? 'Ventas en Efectivo' : 'Ventas por Transferencia'}</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{(() => { let datos = []; let esVenta = false; if (verDetalleModal === 'entrada') datos = movsSesion.filter(m => m.tipo === 'entrada'); else if (verDetalleModal === 'salida') datos = movsSesion.filter(m => m.tipo === 'salida'); else if (verDetalleModal === 'ventas_efectivo') { datos = ventasSesion.filter(v => v.metodo_pago === 'efectivo'); esVenta = true; } else if (verDetalleModal === 'ventas_transferencia') { datos = ventasSesion.filter(v => v.metodo_pago === 'transferencia'); esVenta = true; } if (datos.length === 0) return <p className="text-gray-500 text-center py-4">No hay registros.</p>; return datos.map(d => (<div key={d.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center text-sm border border-gray-600"><div className="flex-1 pr-2">{esVenta ? (<><p className="font-bold text-xs text-gray-300">Tk #{d.id} - 👤 {d.cajero} - 🕒 {d.hora || '--:--'}</p><p className="text-xs text-gray-400 italic line-clamp-1 mt-1">{d.detalles.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p></>) : (<><p className="font-bold text-sm text-white">{d.concepto}</p><p className="text-xs text-gray-400 uppercase">Vía: {d.metodo_pago}</p></>)}</div><span className={`font-black text-lg ${verDetalleModal === 'salida' ? 'text-red-400' : 'text-green-400'}`}>${esVenta ? d.total : d.monto}</span></div>)); })()}</div><button onClick={() => setVerDetalleModal(null)} className="mt-6 bg-gray-600 hover:bg-gray-500 py-3 rounded-lg font-bold w-full uppercase">Cerrar Detalle</button></div>
       </div>
     );
   };
 
+  // VISTA ADMIN DASHBOARD (CON AUDITORÍA QR)
   if (vista === 'admin') {
     const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
-    const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles); return acc; }, {});
+    const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles.map(i => ({...i, horaVenta: v.hora}))); return acc; }, {});
     if (!sesionActiva) return (<div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading || !isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] disabled:opacity-50">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>);
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
@@ -406,7 +390,24 @@ function App() {
             <button onClick={procesarCierre} className="w-full bg-red-600 hover:bg-red-500 py-5 rounded-2xl font-black text-xl border border-red-400 shadow-[0_0_20px_rgba(220,38,38,0.4)]">🔒 CERRAR ARQUEO Z</button>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl space-y-6">
-            <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-2">{data.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
+            <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-3">{data.items.map(i => `${i.cantidad}x ${i.nombre} (${i.horaVenta || '--:--'})`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
+            
+            {/* 🔴 NUEVO: PANEL DE AUDITORÍA QR */}
+            <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
+              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️ QRs Emitidos (Auditoría)</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                {listasVip.length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">No se emitieron QRs.</p> : listasVip.map(l => (
+                  <div key={l.id} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-black text-white uppercase leading-none">{l.nombre}</p>
+                      <p className="text-[10px] text-gray-400 uppercase mt-1">👤 {l.creado_por || 'App'} - 🕒 {l.hora_creacion || '--:--'}</p>
+                    </div>
+                    <span className="text-xs font-black text-yellow-500 bg-black px-2 py-1 rounded">{l.codigo}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="flex justify-between items-center mt-6"><h2 className="text-lg font-black uppercase text-white">📦 Base de Datos (Menú)</h2><div className="text-right"><p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p><p className="text-xl font-black text-green-400">${capitalEnBarra}</p></div></div>
             <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 bg-gray-700/50 p-3 rounded-xl border border-gray-600"><input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required /><input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required /><input type="number" placeholder="Stock" className="w-full sm:w-20 bg-gray-800 p-2 rounded text-sm" value={nuevoStock} onChange={e => setNuevoStock(e.target.value)} required /><select className="w-full sm:w-28 bg-gray-800 p-2 rounded text-sm" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)}><option value="bebida">Bebida</option><option value="combo">Combo</option><option value="entrada">Entrada</option></select><button type="submit" disabled={!isOnline} className="bg-purple-600 px-4 py-2 rounded font-bold text-sm disabled:opacity-50">+</button></form>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-[300px] overflow-y-auto pr-2 custom-scrollbar">{bebidas.map(b => (<div key={b.id} className={`p-4 rounded-xl border relative ${b.stock < 10 ? 'bg-red-900/10 border-red-900' : 'bg-gray-700/30 border-gray-600'}`}><button type="button" onClick={() => eliminarProducto(b.id, b.nombre)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 text-lg">❌</button><p className="font-bold text-sm mb-1 pr-6">{b.nombre}</p><div className="flex justify-between items-center mb-3"><span className="text-green-400 font-black text-lg">${b.precio}</span><span className={`font-bold text-xs bg-gray-800 px-2 py-1 rounded ${b.stock < 10 ? 'text-red-400' : 'text-gray-300'}`}>Stock: {b.stock}</span></div><div className="flex space-x-2"><button type="button" onClick={async () => { const n = prompt('Nuevo precio:', b.precio); if (n) { await supabase.from('bebidas').update({precio:Number(n)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-gray-600 py-2 rounded text-xs font-bold uppercase">Cambiar $</button><button type="button" onClick={async () => { const s = prompt(`Stock exacto:`, b.stock); if (s !== null && !isNaN(s)) { await supabase.from('bebidas').update({stock:Number(s)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-blue-600 py-2 rounded text-xs font-bold uppercase">Mod. Stock</button></div></div>))}</div>
@@ -417,6 +418,7 @@ function App() {
     );
   }
 
+  // VISTA PUERTA / QR
   if (vista === 'puerta' || user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     return (
@@ -499,17 +501,44 @@ function App() {
     );
   }
 
+  // DEFAULT VIEW: POS BARRA (CON ENCUADRE PERFECTO EN CHROME Y .EXE)
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col">
+    <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
       {barraHeader}
       {!sesionActiva ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>
       ) : (
-        <div className="flex-1 p-2 lg:p-4 grid grid-cols-1 lg:grid-cols-3 gap-4 max-w-6xl mx-auto w-full">
-          <div className="lg:col-span-2 space-y-3"><div className="grid grid-cols-2 sm:grid-cols-3 gap-2 lg:gap-3">{bebidas.map((item) => (<button type="button" key={item.id} onClick={() => agregarAlCarrito(item)} className={`p-3 lg:p-4 rounded-xl border text-left flex flex-col justify-between transition active:scale-95 ${item.stock > 0 ? 'bg-gray-800 border-gray-700 hover:border-purple-500' : 'bg-gray-800/40 border-gray-800 opacity-50'}`}><div><span className="text-[10px] font-black uppercase text-purple-500 block mb-1">{item.categoria}</span><p className="font-bold text-xs lg:text-sm line-clamp-2 leading-tight">{item.nombre}</p></div><div className="mt-2 flex justify-between items-end"><span className="text-base lg:text-lg font-black text-green-400">${item.precio}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${item.stock < 10 ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Stk: {item.stock}</span></div></button>))}</div></div>
-          <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col justify-between h-[450px] lg:h-auto shadow-2xl">
-            <div><h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2>{carrito.length === 0 ? (<div className="text-center py-10 text-gray-600"><p className="text-4xl mb-2">🍹</p><p className="text-xs font-bold uppercase">Toque productos para agregar</p></div>) : (<div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">{carrito.map((item) => (<div key={item.id} className="flex items-center justify-between bg-gray-700/40 p-2 rounded-lg border border-gray-600"><div className="flex-1 mr-2"><p className="font-bold text-xs line-clamp-1">{item.nombre}</p><p className="text-xs text-green-400 font-black">${item.precio * item.cantidad}</p></div><div className="flex items-center space-x-1"><button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button><span className="font-black text-sm w-4 text-center">{item.cantidad}</span><button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button></div></div>))}</div>)}</div>
-            <div className="pt-2">
+        <div className="flex-1 p-2 lg:p-4 grid grid-cols-1 lg:grid-cols-3 gap-4 w-full max-w-[1400px] mx-auto lg:h-[calc(100vh-90px)] overflow-y-auto lg:overflow-hidden">
+          {/* LADO IZQUIERDO: PRODUCTOS CON SCROLL PROPIO */}
+          <div className="lg:col-span-2 space-y-3 lg:overflow-y-auto lg:pr-2 custom-scrollbar lg:h-full pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 lg:gap-3">
+              {bebidas.map((item) => (
+                <button type="button" key={item.id} onClick={() => agregarAlCarrito(item)} className={`p-3 lg:p-4 rounded-xl border text-left flex flex-col justify-between transition active:scale-95 ${item.stock > 0 ? 'bg-gray-800 border-gray-700 hover:border-purple-500' : 'bg-gray-800/40 border-gray-800 opacity-50'}`}>
+                  <div><span className="text-[10px] font-black uppercase text-purple-500 block mb-1">{item.categoria}</span><p className="font-bold text-xs lg:text-sm line-clamp-2 leading-tight">{item.nombre}</p></div>
+                  <div className="mt-2 flex justify-between items-end"><span className="text-base lg:text-lg font-black text-green-400">${item.precio}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${item.stock < 10 ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Stk: {item.stock}</span></div>
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          {/* LADO DERECHO: TICKET FIJO */}
+          <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col h-[500px] lg:h-full shadow-2xl">
+            <div><h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2></div>
+            
+            <div className="flex-1 overflow-y-auto pr-1 my-2 space-y-2 custom-scrollbar">
+              {carrito.length === 0 ? (
+                <div className="text-center py-10 text-gray-600"><p className="text-4xl mb-2">🍹</p><p className="text-xs font-bold uppercase">Toque productos para agregar</p></div>
+              ) : (
+                carrito.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between bg-gray-700/40 p-2 rounded-lg border border-gray-600">
+                    <div className="flex-1 mr-2"><p className="font-bold text-xs line-clamp-1">{item.nombre}</p><p className="text-xs text-green-400 font-black">${item.precio * item.cantidad}</p></div>
+                    <div className="flex items-center space-x-1"><button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button><span className="font-black text-sm w-4 text-center">{item.cantidad}</span><button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button></div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-gray-700 mt-auto">
               <div className="flex justify-between items-end mb-3"><span className="text-gray-400 uppercase text-xs font-bold">Total a Pagar</span><span className="text-3xl font-black text-green-400 leading-none">${carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0)}</span></div>
               <div className="flex space-x-2 mb-3"><button type="button" onClick={() => setMetodoPagoPOS('efectivo')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'efectivo' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>💵 Efec</button><button type="button" onClick={() => setMetodoPagoPOS('transferencia')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'transferencia' ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📱 Trans</button><button type="button" onClick={() => setMetodoPagoPOS('fiado')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'fiado' ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📝 Anotar</button></div>
               {metodoPagoPOS === 'fiado' && (<input type="text" placeholder="Nombre de quien saca anotado..." className="w-full mb-3 bg-gray-900 border border-gray-700 p-3 rounded-xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-red-500 text-center uppercase" value={nombreFiado} onChange={e => setNombreFiado(e.target.value)} required />)}
