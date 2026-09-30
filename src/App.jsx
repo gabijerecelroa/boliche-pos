@@ -4,7 +4,12 @@ import { Scanner } from '@yudiel/react-qr-scanner';
 
 function App() {
   const [user, setUser] = useState(null);
-  const [vista, setVista] = useState('login');
+  
+  // MAGIA V11.1: Si el link tiene "?tienda=true", arranca directo en la boletería
+  const [vista, setVista] = useState(() => {
+    return window.location.search.includes('tienda=true') ? 'tienda' : 'login';
+  });
+  
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -62,13 +67,11 @@ function App() {
   const [provCosto, setProvCosto] = useState('');
   const [provConceptoDeuda, setProvConceptoDeuda] = useState('');
 
-  // ESTADOS PARA LA TIENDA ONLINE
   const [preciosWeb, setPreciosWeb] = useState({ general: 5000, vip: 10000 });
   const [nombreWeb, setNombreWeb] = useState('');
   const [tipoWeb, setTipoWeb] = useState('general');
   const [cantWeb, setCantWeb] = useState(1);
 
-  // EFECTO: VERIFICAR PAGOS DE MERCADO PAGO AL CARGAR LA PÁGINA
   useEffect(() => {
     const verificarPagoOnline = async () => {
       const params = new URLSearchParams(window.location.search);
@@ -89,18 +92,17 @@ function App() {
           
           setQrGenerado({ nombre: pendiente.nombre + ' (Web)', cantidad: pendiente.cantidad, codigo, tipo_pase: pendiente.tipo, fiesta: sData ? sData[0].nombre_fiesta : 'FIESTA' });
           localStorage.removeItem('compra_pendiente');
-          window.history.replaceState({}, document.title, "/");
+          window.history.replaceState({}, document.title, "/?tienda=true");
           setLoading(false);
         }
       } else if (params.get('pago') === 'fallo') {
         alert("❌ El pago no se pudo completar. Intenta nuevamente.");
-        window.history.replaceState({}, document.title, "/");
+        window.history.replaceState({}, document.title, "/?tienda=true");
       }
     };
     verificarPagoOnline();
   }, []);
 
-  // EFECTO PARA PRECIOS DE TIENDA
   useEffect(() => {
     const getPrecios = async () => {
       const { data } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
@@ -245,11 +247,11 @@ function App() {
       const resp = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ titulo: `Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio, cantidad: cantWeb, tipoPase: tipoWeb, origin })
+        body: JSON.stringify({ titulo: `Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio, cantidad: cantWeb, tipoPase: tipoWeb, origin: origin + '/?tienda=true' })
       });
       const data = await resp.json();
       if (data.url_pago) { window.location.href = data.url_pago; } 
-      else { alert("Error al conectar con Mercado Pago"); setLoading(false); }
+      else { alert("Error al conectar con Mercado Pago. Revisa las credenciales."); setLoading(false); }
     } catch(e) {
       console.error(e); alert("Error de red"); setLoading(false);
     }
@@ -289,25 +291,28 @@ function App() {
           <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR'} ({qrGenerado.cantidad} pers)</p>
         </div>
         <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button>
-        <button onClick={() => { setQrGenerado(null); if(!user) setVista('login'); }} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
+        <button onClick={() => { setQrGenerado(null); }} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
       </div>
     </div>
   ) : null;
 
+  // ===== VISTA EXCLUSIVA TIENDA ONLINE (SIN LOGIN) =====
   if (vista === 'tienda') {
     const precioActual = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
     return (
       <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
         {modalQRComponent}
         <div className="bg-gray-800 p-8 rounded-3xl shadow-2xl w-full max-w-md border border-gray-700 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 to-purple-600"></div>
-          <button onClick={() => setVista('login')} className="absolute top-4 right-4 text-gray-400 hover:text-white">✖</button>
-          <div className="text-center mb-8"><h1 className="text-3xl font-black text-purple-400 tracking-widest uppercase">Boletería Web</h1><p className="text-gray-400 text-sm mt-1">Compra oficial GJBROSS</p></div>
+          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#009EE3] to-purple-600"></div>
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-black text-purple-400 tracking-widest uppercase">Boletería Web</h1>
+            <p className="text-gray-400 text-sm mt-1">Compra oficial GJBROSS</p>
+          </div>
           <form onSubmit={handleComprarOnline} className="space-y-6">
-            <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: Juan Perez" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
+            <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: Gabriel Roa" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
             <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Tipo de Entrada</label>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
+                <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
                 <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
               </div>
             </div>
@@ -322,6 +327,7 @@ function App() {
     );
   }
 
+  // ===== VISTA LOGIN STAFF =====
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4 flex-col">
@@ -334,8 +340,6 @@ function App() {
             <input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="********" required />
             <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-lg shadow-lg">ENTRAR AL SISTEMA</button>
           </form>
-          <hr className="my-6 border-gray-700" />
-          <button type="button" onClick={() => setVista('tienda')} className="w-full bg-transparent border-2 border-[#009EE3] text-[#009EE3] hover:bg-[#009EE3] hover:text-white transition font-black py-3 rounded-lg uppercase tracking-wide">🎟️ Tienda de Entradas</button>
         </div>
       </div>
     );
@@ -354,9 +358,7 @@ function App() {
         </div>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        {/* BOTON ANTI ESTAFAS */}
-        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 Validar Transferencias</button>}
-        
+        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 MP (Transf)</button>}
         {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
         {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
         {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 QRs</button>}
@@ -409,7 +411,7 @@ function App() {
 
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
-    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
   };
 
   const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
@@ -515,7 +517,7 @@ function App() {
             
             {/* AUDITORÍA QR */}
             <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
-              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️ QRs Emitidos (Auditoría)</h2>
+              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️️ QRs Emitidos (Auditoría)</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
                 {listasVip.length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">No se emitieron QRs.</p> : listasVip.map(l => (
                   <div key={l.id} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
