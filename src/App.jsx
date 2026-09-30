@@ -62,6 +62,53 @@ function App() {
   const [provCosto, setProvCosto] = useState('');
   const [provConceptoDeuda, setProvConceptoDeuda] = useState('');
 
+  // ESTADOS PARA LA TIENDA ONLINE
+  const [preciosWeb, setPreciosWeb] = useState({ general: 5000, vip: 10000 });
+  const [nombreWeb, setNombreWeb] = useState('');
+  const [tipoWeb, setTipoWeb] = useState('general');
+  const [cantWeb, setCantWeb] = useState(1);
+
+  // EFECTO: VERIFICAR PAGOS DE MERCADO PAGO AL CARGAR LA PÁGINA
+  useEffect(() => {
+    const verificarPagoOnline = async () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('pago') === 'exito') {
+        const pendiente = JSON.parse(localStorage.getItem('compra_pendiente'));
+        if (pendiente) {
+          setLoading(true);
+          const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
+          const sId = sData && sData.length > 0 ? sData[0].id : null;
+          const prefijo = pendiente.tipo === 'vip' ? 'VIP-' : 'GEN-'; 
+          const codigo = prefijo + Math.random().toString(36).substr(2, 5).toUpperCase();
+          const hora = new Date().toLocaleTimeString();
+          
+          await supabase.from('listas_vip').insert([{ 
+            sesion_id: sId, nombre: pendiente.nombre + ' (Online)', cantidad: pendiente.cantidad, 
+            ingresados: 0, codigo, tipo_pase: pendiente.tipo, creado_por: 'MercadoPago Web', hora_creacion: hora 
+          }]);
+          
+          setQrGenerado({ nombre: pendiente.nombre + ' (Web)', cantidad: pendiente.cantidad, codigo, tipo_pase: pendiente.tipo, fiesta: sData ? sData[0].nombre_fiesta : 'FIESTA' });
+          localStorage.removeItem('compra_pendiente');
+          window.history.replaceState({}, document.title, "/");
+          setLoading(false);
+        }
+      } else if (params.get('pago') === 'fallo') {
+        alert("❌ El pago no se pudo completar. Intenta nuevamente.");
+        window.history.replaceState({}, document.title, "/");
+      }
+    };
+    verificarPagoOnline();
+  }, []);
+
+  // EFECTO PARA PRECIOS DE TIENDA
+  useEffect(() => {
+    const getPrecios = async () => {
+      const { data } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
+      if(data && data[0]) setPreciosWeb({general: data[0].precio_general || 5000, vip: data[0].precio_vip || 10000});
+    };
+    if(vista === 'tienda') getPrecios();
+  }, [vista]);
+
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
     const goOffline = () => setIsOnline(false);
@@ -185,6 +232,141 @@ function App() {
     } 
   };
 
+  const handleComprarOnline = async (e) => {
+    e.preventDefault();
+    if (!nombreWeb.trim()) return alert("Ingresa tu nombre y apellido");
+    setLoading(true);
+    const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
+    const origin = window.location.origin;
+    
+    localStorage.setItem('compra_pendiente', JSON.stringify({ nombre: nombreWeb, tipo: tipoWeb, cantidad: cantWeb }));
+
+    try {
+      const resp = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titulo: `Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio, cantidad: cantWeb, tipoPase: tipoWeb, origin })
+      });
+      const data = await resp.json();
+      if (data.url_pago) { window.location.href = data.url_pago; } 
+      else { alert("Error al conectar con Mercado Pago"); setLoading(false); }
+    } catch(e) {
+      console.error(e); alert("Error de red"); setLoading(false);
+    }
+  };
+
+  const descargarInvitacion = (qrData) => { 
+    const canvas = document.createElement('canvas'); canvas.width = 1080; canvas.height = 1920; const ctx = canvas.getContext('2d'); 
+    const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
+    ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
+    ctx.fillStyle = '#10b981'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; 
+    const textoFiesta = `FIESTA: ${(qrData.fiesta || sesionActiva?.nombre_fiesta || '').toUpperCase()}`;
+    ctx.fillText(textoFiesta, 540, 150, 900); 
+    ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; ctx.fillText('GJBROSS', 540, 250); 
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 120px sans-serif'; 
+    const textoPase = qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR';
+    ctx.fillText(textoPase, 540, 420); 
+    ctx.fillStyle = '#fbbf24'; ctx.font = '60px sans-serif'; ctx.fillText(qrData.nombre.toUpperCase(), 540, 600, 900); 
+    ctx.fillStyle = '#9ca3af'; ctx.font = '40px sans-serif'; ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 680); 
+    const img = new Image(); img.crossOrigin = 'Anonymous'; 
+    img.onload = () => { 
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(270, 800, 540, 540); ctx.drawImage(img, 290, 820, 500, 500); 
+        ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 60px sans-serif'; ctx.fillText(qrData.codigo, 540, 1500); 
+        ctx.fillStyle = '#9ca3af'; ctx.font = '35px sans-serif'; ctx.fillText('Presenta este código en la puerta', 540, 1750); 
+        const link = document.createElement('a'); link.download = `Invitacion_${qrData.tipo_pase||'vip'}_${qrData.nombre}.png`; link.href = canvas.toDataURL('image/png'); link.click(); 
+    }; 
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`; 
+  };
+
+  const modalQRComponent = qrGenerado ? (
+    <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div>
+        <h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2>
+        <p className="text-purple-600 font-black uppercase text-sm mb-6">{qrGenerado.fiesta || sesionActiva?.nombre_fiesta}</p>
+        <div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6">
+          <p className="font-black text-2xl text-black uppercase line-clamp-1">{qrGenerado.nombre}</p>
+          <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR'} ({qrGenerado.cantidad} pers)</p>
+        </div>
+        <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button>
+        <button onClick={() => { setQrGenerado(null); if(!user) setVista('login'); }} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
+      </div>
+    </div>
+  ) : null;
+
+  if (vista === 'tienda') {
+    const precioActual = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
+    return (
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
+        {modalQRComponent}
+        <div className="bg-gray-800 p-8 rounded-3xl shadow-2xl w-full max-w-md border border-gray-700 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 to-purple-600"></div>
+          <button onClick={() => setVista('login')} className="absolute top-4 right-4 text-gray-400 hover:text-white">✖</button>
+          <div className="text-center mb-8"><h1 className="text-3xl font-black text-purple-400 tracking-widest uppercase">Boletería Web</h1><p className="text-gray-400 text-sm mt-1">Compra oficial GJBROSS</p></div>
+          <form onSubmit={handleComprarOnline} className="space-y-6">
+            <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: Juan Perez" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
+            <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Tipo de Entrada</label>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
+                <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
+              </div>
+            </div>
+            <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Cantidad</label>
+              <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">+</button></div>
+            </div>
+            <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${precioActual * cantWeb}</span></div>
+            <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2">{loading ? 'Procesando...' : 'Pagar con Mercado Pago'}</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4 flex-col">
+        {modalQRComponent}
+        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 relative">
+          {!isOnline && <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">SIN INTERNET</div>}
+          <div className="text-center mb-8"><h1 className="text-4xl font-black text-purple-500 tracking-widest">GJBROSS</h1><p className="text-white tracking-widest text-sm mt-1">SISTEMA POS</p></div>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <input type="text" id="username" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="Usuario Staff" required />
+            <input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="********" required />
+            <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-lg shadow-lg">ENTRAR AL SISTEMA</button>
+          </form>
+          <hr className="my-6 border-gray-700" />
+          <button type="button" onClick={() => setVista('tienda')} className="w-full bg-transparent border-2 border-[#009EE3] text-[#009EE3] hover:bg-[#009EE3] hover:text-white transition font-black py-3 rounded-lg uppercase tracking-wide">🎟️ Tienda de Entradas</button>
+        </div>
+      </div>
+    );
+  }
+
+  const pendingCount = (JSON.parse(localStorage.getItem('ventasOffline')||'[]').length) + (JSON.parse(localStorage.getItem('puertaOffline')||'[]').length);
+
+  const barraHeader = (
+    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3 shadow-lg print:hidden shrink-0">
+      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
+        <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
+        <div className="flex items-center gap-2 mt-1">
+          {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
+          <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-widest ${isOnline ? 'bg-blue-900/50 text-blue-400 border border-blue-800' : 'bg-red-900/50 text-red-400 border border-red-800'}`}>{isOnline ? '🌐 Online' : '⚠️ Offline'}</span>
+          {pendingCount > 0 && <span className="text-[10px] bg-yellow-600 text-black px-2 py-0.5 rounded font-black uppercase animate-pulse">⏳ {pendingCount} PENDIENTES</span>}
+        </div>
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {/* BOTON ANTI ESTAFAS */}
+        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 Validar Transferencias</button>}
+        
+        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
+        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 QRs</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'cajero') && vista !== 'pos' && <button onClick={() => setVista('pos')} className="bg-green-600 hover:bg-green-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🍹 Barra</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'boleteria') && vista !== 'boleteria' && <button onClick={() => setVista('boleteria')} className="bg-indigo-600 hover:bg-indigo-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🎟️ Boletería</button>}
+        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
+      </div>
+    </header>
+  );
+
   const abrirCaja = async (e) => { e.preventDefault(); if(!isOnline) return alert("Conectate para abrir caja"); if (!nombreFiestaApertura) return; setLoading(true); await supabase.from('sesiones').insert([{ nombre_fiesta: nombreFiestaApertura, abierta_por: user.usuario }]); await cargarDatos(); setLoading(false); setVista('admin'); };
   const actualizarPreciosTaquilla = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('sesiones').update({ precio_general: Number(precioG), precio_vip: Number(precioV) }).eq('id', sesionActiva.id); await cargarDatos(); setLoading(false); alert('✅ Precios de taquilla actualizados.'); };
   const crearStaff = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('cajeros').insert([{ usuario: nuevoStaffUser, password: nuevoStaffPass, rol: nuevoStaffRol, cupo_listas: nuevoStaffRol === 'puerta' ? Number(nuevoStaffCupo) : 0 }]); setNuevoStaffUser(''); setNuevoStaffPass(''); setNuevoStaffCupo(0); await cargarDatos(); setLoading(false); alert('✅ Empleado creado exitosamente.'); };
@@ -225,29 +407,6 @@ function App() {
     } setLoading(false); 
   };
 
-  const descargarInvitacion = (qrData) => { 
-    const canvas = document.createElement('canvas'); canvas.width = 1080; canvas.height = 1920; const ctx = canvas.getContext('2d'); 
-    const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
-    ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
-    ctx.fillStyle = '#10b981'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; 
-    const textoFiesta = `FIESTA: ${sesionActiva?.nombre_fiesta?.toUpperCase() || ''}`;
-    ctx.fillText(textoFiesta, 540, 150, 900); 
-    ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; ctx.fillText('GJBROSS', 540, 250); 
-    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 120px sans-serif'; 
-    const textoPase = qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR';
-    ctx.fillText(textoPase, 540, 420); 
-    ctx.fillStyle = '#fbbf24'; ctx.font = '60px sans-serif'; ctx.fillText(qrData.nombre.toUpperCase(), 540, 600, 900); 
-    ctx.fillStyle = '#9ca3af'; ctx.font = '40px sans-serif'; ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 680); 
-    const img = new Image(); img.crossOrigin = 'Anonymous'; 
-    img.onload = () => { 
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(270, 800, 540, 540); ctx.drawImage(img, 290, 820, 500, 500); 
-        ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 60px sans-serif'; ctx.fillText(qrData.codigo, 540, 1500); 
-        ctx.fillStyle = '#9ca3af'; ctx.font = '35px sans-serif'; ctx.fillText('Presenta este código en la puerta', 540, 1750); 
-        const link = document.createElement('a'); link.download = `Invitacion_${qrData.tipo_pase||'vip'}_${qrData.nombre}.png`; link.href = canvas.toDataURL('image/png'); link.click(); 
-    }; 
-    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`; 
-  };
-  
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
     setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
@@ -288,45 +447,6 @@ function App() {
   const eliminarProducto = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Eliminar "${nombre}"?`)) { setLoading(true); await supabase.from('bebidas').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
   const registrarMovimiento = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: movTipo, concepto: movConcepto, monto: Number(movMonto), metodo_pago: movMetodo, sesion_id: sesionActiva.id }]); setMovConcepto(''); setMovMonto(''); cargarDatos(); setLoading(false); };
   const procesarCierre = async () => { if (!isOnline) return alert("❌ No puedes cerrar caja sin conexión a internet."); if (!window.confirm('⚠️ ¿CERRAR CAJA definitivamente?')) return; setLoading(true); let conteoProductos = {}; ventasSesion.forEach(v => { v.detalles.forEach(item => { if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0; conteoProductos[item.nombre] += item.cantidad; }); }); const resumenCierre = { estado: 'cerrada', cerrada_por: user.usuario, fecha_cierre: new Date().toISOString(), recaudacion_efectivo: CAJA_FISICA, recaudacion_transf: CAJA_BANCO, total_salidas: movsSesion.filter(m=>m.tipo==='salida').reduce((a,c)=>a+Number(c.monto),0), total_ingresos: movsSesion.filter(m=>m.tipo==='entrada').reduce((a,c)=>a+Number(c.monto),0), ranking_ventas: conteoProductos, personas_vendidas: personasVendidas, personas_lista: personasListaIngresadas }; await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id); setTicketActual({ tipo: 'cierre', fiesta: sesionActiva.nombre_fiesta, fecha: new Date().toLocaleDateString(), hora: new Date().toLocaleTimeString(), responsable: user.usuario, ventas_efectivo: totalEfecVentas, ventas_transf: totalTransfVentas, puerta_efectivo: totalEfecPuerta, puerta_transf: totalTransfPuerta, salidas_efec: salidasEfec, salidas_transf: salidasTransf, entradas_efec: entradasExtraEfec, entradas_transf: entradasExtraTransf, cant_generales: cantGenerales, cant_vips: cantVips, fiados_pendientes: totalFiadosPendientes, ...resumenCierre }); setSesionActiva(null); setVista('admin'); setLoading(false); };
-
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
-        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 relative">
-          {!isOnline && <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">SIN INTERNET</div>}
-          <div className="text-center mb-8"><h1 className="text-4xl font-black text-purple-500 tracking-widest">GJBROSS</h1><p className="text-white tracking-widest text-sm mt-1">SISTEMA POS</p></div>
-          <form onSubmit={handleLogin} className="space-y-6">
-            <input type="text" id="username" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="Usuario" required />
-            <input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="********" required />
-            <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-lg shadow-lg">ENTRAR</button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  const pendingCount = (JSON.parse(localStorage.getItem('ventasOffline')||'[]').length) + (JSON.parse(localStorage.getItem('puertaOffline')||'[]').length);
-
-  const barraHeader = (
-    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3 shadow-lg print:hidden shrink-0">
-      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
-        <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
-        <div className="flex items-center gap-2 mt-1">
-          {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
-          <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-widest ${isOnline ? 'bg-blue-900/50 text-blue-400 border border-blue-800' : 'bg-red-900/50 text-red-400 border border-red-800'}`}>{isOnline ? '🌐 Online' : '⚠️ Offline'}</span>
-          {pendingCount > 0 && <span className="text-[10px] bg-yellow-600 text-black px-2 py-0.5 rounded font-black uppercase animate-pulse">⏳ {pendingCount} PENDIENTES</span>}
-        </div>
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
-        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 QRs / Puerta</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'cajero') && vista !== 'pos' && <button onClick={() => setVista('pos')} className="bg-green-600 hover:bg-green-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🍹 Barra</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'boleteria') && vista !== 'boleteria' && <button onClick={() => setVista('boleteria')} className="bg-indigo-600 hover:bg-indigo-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🎟️ Boletería</button>}
-        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
-      </div>
-    </header>
-  );
 
   if (ticketActual) {
     return (
@@ -371,7 +491,7 @@ function App() {
     );
   };
 
-  // VISTA ADMIN DASHBOARD (CON AUDITORÍA QR)
+  // VISTA ADMIN DASHBOARD
   if (vista === 'admin') {
     const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
     const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles.map(i => ({...i, horaVenta: v.hora}))); return acc; }, {});
@@ -380,6 +500,7 @@ function App() {
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
         {renderDetallesModal()}
+        {modalQRComponent}
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6"><div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2><p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p></div><div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2><p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2><p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda Proveedores</h2><p className="text-3xl font-black text-orange-400">${deudaProveedores}</p></div><div className="bg-red-900/30 p-5 rounded-2xl border border-red-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Cuentas x Cobrar</h2><p className="text-3xl font-black text-red-400">${totalFiadosPendientes}</p></div></div>
         <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-6 flex justify-between items-center shadow-lg"><div><h2 className="text-sm font-bold text-gray-400 uppercase mb-1">🎟️ Ventas Boletería</h2><p className="text-sm text-white"><span className="text-indigo-400 font-black">{cantGenerales}</span> Generales | <span className="text-purple-400 font-black">{cantVips}</span> VIPs</p></div><div className="text-right"><p className="text-xs text-gray-500 uppercase">Recaudado Taquilla</p><p className="text-2xl font-black text-green-400">${totalEfecPuerta + totalTransfPuerta}</p></div></div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -392,7 +513,7 @@ function App() {
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl space-y-6">
             <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-3">{data.items.map(i => `${i.cantidad}x ${i.nombre} (${i.horaVenta || '--:--'})`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
             
-            {/* 🔴 NUEVO: PANEL DE AUDITORÍA QR */}
+            {/* AUDITORÍA QR */}
             <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
               <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️ QRs Emitidos (Auditoría)</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
@@ -451,7 +572,7 @@ function App() {
             </div>
           </div>
         )}
-        {qrGenerado && (<div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"><div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden"><div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div><h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2><p className="text-purple-600 font-black uppercase text-sm mb-6">{sesionActiva?.nombre_fiesta}</p><div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6"><p className="font-black text-2xl text-black uppercase">{qrGenerado.nombre}</p><p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR'} ({qrGenerado.cantidad} pers)</p></div><button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación Pro</button><button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button></div></div>)}
+        {modalQRComponent}
         {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2></div>) : (
           <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
             {(user.rol === 'admin' || user.rol === 'puerta') && (
@@ -468,6 +589,7 @@ function App() {
     );
   }
 
+  // VISTA BOLETERÍA
   if (vista === 'boleteria' || user.rol === 'boleteria') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
@@ -501,7 +623,7 @@ function App() {
     );
   }
 
-  // DEFAULT VIEW: POS BARRA (CON ENCUADRE PERFECTO EN CHROME Y .EXE)
+  // DEFAULT VIEW: POS BARRA 
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
       {barraHeader}
@@ -509,7 +631,6 @@ function App() {
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>
       ) : (
         <div className="flex-1 p-2 lg:p-4 grid grid-cols-1 lg:grid-cols-3 gap-4 w-full max-w-[1400px] mx-auto lg:h-[calc(100vh-90px)] overflow-y-auto lg:overflow-hidden">
-          {/* LADO IZQUIERDO: PRODUCTOS CON SCROLL PROPIO */}
           <div className="lg:col-span-2 space-y-3 lg:overflow-y-auto lg:pr-2 custom-scrollbar lg:h-full pb-4">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 lg:gap-3">
               {bebidas.map((item) => (
@@ -521,10 +642,8 @@ function App() {
             </div>
           </div>
           
-          {/* LADO DERECHO: TICKET FIJO */}
           <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col h-[500px] lg:h-full shadow-2xl">
             <div><h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2></div>
-            
             <div className="flex-1 overflow-y-auto pr-1 my-2 space-y-2 custom-scrollbar">
               {carrito.length === 0 ? (
                 <div className="text-center py-10 text-gray-600"><p className="text-4xl mb-2">🍹</p><p className="text-xs font-bold uppercase">Toque productos para agregar</p></div>
