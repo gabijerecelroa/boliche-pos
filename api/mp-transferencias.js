@@ -10,15 +10,32 @@ export default async function handler(req, res) {
     
     if (data.results) {
       const transacciones = data.results.map(p => {
-        // Buscamos el nombre real escondido en los datos del banco (CVU/CBU) o en su perfil de MP
-        const nombreCVU = p.point_of_interaction?.transaction_data?.bank_info?.payer?.account_holder_name;
-        const nombreMP = p.payer?.first_name ? `${p.payer.first_name} ${p.payer.last_name || ''}`.trim() : null;
-        const nombreReal = nombreCVU || nombreMP;
+        // Escaneamos todos los cajones posibles donde MP esconde el nombre
+        const n1 = p.point_of_interaction?.transaction_data?.bank_info?.payer?.account_holder_name;
+        const n2 = p.payer?.first_name ? `${p.payer.first_name} ${p.payer.last_name || ''}`.trim() : null;
+        const n3 = p.additional_info?.payer?.first_name ? `${p.additional_info.payer.first_name} ${p.additional_info.payer.last_name || ''}`.trim() : null;
+        const n4 = p.transaction_details?.bank_transfer_payer_name;
+        
+        let nombreReal = n1 || n2 || n3 || n4;
 
-        // Limpiamos el texto feo de "Bank Transfer"
+        // Limpieza por si MP manda datos vacíos de relleno
+        if (!nombreReal || nombreReal.toLowerCase().includes('null')) {
+            nombreReal = null;
+        }
+
         let descripcionLimpia = p.description;
-        if (descripcionLimpia === 'Bank Transfer' || descripcionLimpia === 'Transferencia de cuenta de terceros' || !descripcionLimpia) {
-            descripcionLimpia = nombreReal ? `Transf. de ${nombreReal}` : 'Transferencia Bancaria';
+        
+        // Si la descripción es fea o genérica, la reemplazamos
+        if (!descripcionLimpia || descripcionLimpia === 'Bank Transfer' || descripcionLimpia === 'Transferencia de cuenta de terceros' || descripcionLimpia.includes('Transferencia')) {
+            if (nombreReal) {
+                descripcionLimpia = `Transf. de ${nombreReal}`;
+            } else if (p.payer?.email && !p.payer.email.includes('mercadopago')) {
+                // PLAN B: Usar el inicio del correo si no hay nombre oficial
+                const emailName = p.payer.email.split('@')[0].toUpperCase();
+                descripcionLimpia = `Transf. de ${emailName}`;
+            } else {
+                descripcionLimpia = 'Transferencia Bancaria';
+            }
         }
 
         return {
@@ -26,7 +43,7 @@ export default async function handler(req, res) {
           monto: p.transaction_amount,
           descripcion: descripcionLimpia,
           fecha: new Date(p.date_created).toLocaleString('es-AR'),
-          email: p.payer?.email || 'App Mercado Pago'
+          email: p.payer?.email || 'N/A'
         };
       });
       res.status(200).json(transacciones);
