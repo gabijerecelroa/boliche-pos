@@ -33,6 +33,11 @@ function App() {
   const [qrGenerado, setQrGenerado] = useState(null);
   const [mostrarEscaner, setMostrarEscaner] = useState(false);
 
+  // NUEVOS ESTADOS PARA EL PANEL DE TRANSFERENCIAS MP
+  const [modalMP, setModalMP] = useState(false);
+  const [transfMP, setTransfMP] = useState([]);
+  const [cargandoMP, setCargandoMP] = useState(false);
+
   const [movTipo, setMovTipo] = useState('salida');
   const [movConcepto, setMovConcepto] = useState('');
   const [movMonto, setMovMonto] = useState('');
@@ -71,11 +76,9 @@ function App() {
   const [tipoWeb, setTipoWeb] = useState('general');
   const [cantWeb, setCantWeb] = useState(1);
 
-  // EFECTO: VERIFICAR PAGOS DE MERCADO PAGO
   useEffect(() => {
     const verificarPagoOnline = async () => {
       const params = new URLSearchParams(window.location.search);
-      // Ahora leemos el status oficial de Mercado Pago
       if (params.get('status') === 'approved' || params.get('pago') === 'exito') {
         const pendiente = JSON.parse(localStorage.getItem('compra_pendiente'));
         if (pendiente) {
@@ -93,7 +96,6 @@ function App() {
           
           setQrGenerado({ nombre: pendiente.nombre + ' (Web)', cantidad: pendiente.cantidad, codigo, tipo_pase: pendiente.tipo, fiesta: sData ? sData[0].nombre_fiesta : 'FIESTA' });
           localStorage.removeItem('compra_pendiente');
-          // Limpiamos la URL para no mostrar todos los códigos de MP
           window.history.replaceState({}, document.title, "/?tienda=true");
           setLoading(false);
         }
@@ -199,6 +201,24 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // FUNCION PARA BUSCAR LOS PAGOS DE MP
+  const cargarTransferenciasMP = async () => {
+    if (!isOnline) return alert("Necesitas internet para verificar Mercado Pago.");
+    setCargandoMP(true);
+    try {
+      const res = await fetch('/api/mp-transferencias');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setTransfMP(data);
+      } else {
+        alert("Error de credenciales al conectar con MP.");
+      }
+    } catch (error) {
+      alert("Fallo de red al buscar pagos.");
+    }
+    setCargandoMP(false);
+  };
+
   const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
   const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + ((c.cantidad||1) * c.costo), 0) - (p.descuento || 0)), 0);
   
@@ -298,6 +318,39 @@ function App() {
     </div>
   ) : null;
 
+  // COMPONENTE PANEL INTERNO DE MERCADO PAGO
+  const renderModalValidacionMP = () => {
+    if (!modalMP) return null;
+    return (
+      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4">
+        <div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col shadow-[0_0_40px_rgba(0,158,227,0.3)]">
+          <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3">
+            <h2 className="text-lg font-black uppercase text-[#009EE3] flex items-center gap-2">📱 Pagos Recientes MP</h2>
+            <button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl transition">✖</button>
+          </div>
+          <button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl mb-4 uppercase transition active:scale-95 shadow-lg tracking-widest">
+            {cargandoMP ? 'Buscando...' : '🔄 Actualizar Lista'}
+          </button>
+          <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+            {transfMP.length === 0 && !cargandoMP ? (
+              <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros recientes o<br/>toca "Actualizar".</p>
+            ) : (
+              transfMP.map(t => (
+                <div key={t.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 flex justify-between items-center shadow-inner">
+                  <div className="flex-1 pr-2">
+                    <p className="font-bold text-white text-sm line-clamp-1">{t.descripcion || 'Cobro / Transferencia'}</p>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-wider">{t.fecha} • {t.email}</p>
+                  </div>
+                  <span className="font-black text-green-400 text-xl">+${t.monto}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ===== VISTA EXCLUSIVA TIENDA ONLINE (SIN LOGIN) =====
   if (vista === 'tienda') {
     const precioActual = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
@@ -360,7 +413,9 @@ function App() {
         </div>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 MP (Transf)</button>}
+        {/* BOTON ANTI ESTAFAS ACTUALIZADO PARA ABRIR EL MODAL INTERNO */}
+        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => { setModalMP(true); cargarTransferenciasMP(); }} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 Validar Pago MP</button>}
+        
         {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
         {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
         {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 QRs</button>}
@@ -498,11 +553,12 @@ function App() {
   if (vista === 'admin') {
     const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
     const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles.map(i => ({...i, horaVenta: v.hora}))); return acc; }, {});
-    if (!sesionActiva) return (<div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading || !isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] disabled:opacity-50">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>);
+    if (!sesionActiva) return (<div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}{renderModalValidacionMP()}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading || !isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] disabled:opacity-50">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>);
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
         {barraHeader}
         {renderDetallesModal()}
+        {renderModalValidacionMP()}
         {modalQRComponent}
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6"><div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2><p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p></div><div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2><p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2><p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div><div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda Proveedores</h2><p className="text-3xl font-black text-orange-400">${deudaProveedores}</p></div><div className="bg-red-900/30 p-5 rounded-2xl border border-red-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Cuentas x Cobrar</h2><p className="text-3xl font-black text-red-400">${totalFiadosPendientes}</p></div></div>
         <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-6 flex justify-between items-center shadow-lg"><div><h2 className="text-sm font-bold text-gray-400 uppercase mb-1">🎟️ Ventas Boletería</h2><p className="text-sm text-white"><span className="text-indigo-400 font-black">{cantGenerales}</span> Generales | <span className="text-purple-400 font-black">{cantVips}</span> VIPs</p></div><div className="text-right"><p className="text-xs text-gray-500 uppercase">Recaudado Taquilla</p><p className="text-2xl font-black text-green-400">${totalEfecPuerta + totalTransfPuerta}</p></div></div>
@@ -517,7 +573,7 @@ function App() {
             <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-3">{data.items.map(i => `${i.cantidad}x ${i.nombre} (${i.horaVenta || '--:--'})`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
             
             <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
-              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️ QRs Emitidos (Auditoría)</h2>
+              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟 QRs Emitidos (Auditoría)</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
                 {listasVip.length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">No se emitieron QRs.</p> : listasVip.map(l => (
                   <div key={l.id} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
@@ -546,6 +602,7 @@ function App() {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
         {barraHeader}
+        {renderModalValidacionMP()}
         {mostrarEscaner && (
           <div className="fixed inset-0 bg-black z-[100] flex flex-col">
             <div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8">
@@ -594,6 +651,7 @@ function App() {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
         {barraHeader}
+        {renderModalValidacionMP()}
         {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>) : (
           <div className="max-w-md mx-auto w-full mt-4 bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl"><h2 className="text-3xl font-black uppercase text-center text-indigo-400 mb-8 tracking-widest">🎟️ TAQUILLA</h2><form onSubmit={venderEntradas} className="space-y-6"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Tipo de Pulsera</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoEntradaVenta('General')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'General' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>General</button><button type="button" onClick={() => setTipoEntradaVenta('VIP')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'VIP' ? 'bg-purple-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>Pase VIP</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Precio Unitario Oficial ($)</label><div className="w-full bg-gray-900 p-4 rounded-xl font-black text-2xl text-center text-gray-300 border border-gray-700">${precioActualTaquilla}</div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Cantidad a Vender</label><div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantEntradas(Math.max(1, cantEntradas - 1))} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-3xl focus:outline-none" value={cantEntradas} readOnly /><button type="button" onClick={() => setCantEntradas(cantEntradas + 1)} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">+</button></div></div><div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Cobrar</span><span className="text-5xl font-black text-green-400">${cantEntradas * precioActualTaquilla}</span></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Método de Pago</label><div className="flex space-x-2"><button type="button" onClick={() => setPagoEntrada('efectivo')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'efectivo' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>💵 Efectivo</button><button type="button" onClick={() => setPagoEntrada('transferencia')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'transferencia' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>📱 Transf</button></div></div><button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-6 rounded-xl font-black text-2xl uppercase shadow-[0_0_20px_rgba(34,197,94,0.4)] active:scale-95 transition">✅ COBRAR</button></form></div>
         )}
@@ -623,9 +681,11 @@ function App() {
     );
   }
 
+  // DEFAULT VIEW: POS BARRA 
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
       {barraHeader}
+      {renderModalValidacionMP()}
       {!sesionActiva ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>
       ) : (
