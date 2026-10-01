@@ -5,7 +5,6 @@ import { Scanner } from '@yudiel/react-qr-scanner';
 function App() {
   const [user, setUser] = useState(null);
   
-  // MAGIA V11.1: Si el link tiene "?tienda=true", arranca directo en la boletería
   const [vista, setVista] = useState(() => {
     return window.location.search.includes('tienda=true') ? 'tienda' : 'login';
   });
@@ -72,10 +71,12 @@ function App() {
   const [tipoWeb, setTipoWeb] = useState('general');
   const [cantWeb, setCantWeb] = useState(1);
 
+  // EFECTO: VERIFICAR PAGOS DE MERCADO PAGO
   useEffect(() => {
     const verificarPagoOnline = async () => {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('pago') === 'exito') {
+      // Ahora leemos el status oficial de Mercado Pago
+      if (params.get('status') === 'approved' || params.get('pago') === 'exito') {
         const pendiente = JSON.parse(localStorage.getItem('compra_pendiente'));
         if (pendiente) {
           setLoading(true);
@@ -87,16 +88,17 @@ function App() {
           
           await supabase.from('listas_vip').insert([{ 
             sesion_id: sId, nombre: pendiente.nombre + ' (Online)', cantidad: pendiente.cantidad, 
-            ingresados: 0, codigo, tipo_pase: pendiente.tipo, creado_por: 'MercadoPago Web', hora_creacion: hora 
+            ingresados: 0, codigo, tipo_pase: pendiente.tipo, creado_por: 'Tienda Online', hora_creacion: hora 
           }]);
           
           setQrGenerado({ nombre: pendiente.nombre + ' (Web)', cantidad: pendiente.cantidad, codigo, tipo_pase: pendiente.tipo, fiesta: sData ? sData[0].nombre_fiesta : 'FIESTA' });
           localStorage.removeItem('compra_pendiente');
+          // Limpiamos la URL para no mostrar todos los códigos de MP
           window.history.replaceState({}, document.title, "/?tienda=true");
           setLoading(false);
         }
-      } else if (params.get('pago') === 'fallo') {
-        alert("❌ El pago no se pudo completar. Intenta nuevamente.");
+      } else if (params.get('status') === 'rejected' || params.get('pago') === 'fallo') {
+        alert("❌ El pago fue rechazado o cancelado. Intenta nuevamente.");
         window.history.replaceState({}, document.title, "/?tienda=true");
       }
     };
@@ -247,7 +249,7 @@ function App() {
       const resp = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ titulo: `Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio, cantidad: cantWeb, tipoPase: tipoWeb, origin: origin + '/?tienda=true' })
+        body: JSON.stringify({ titulo: `Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio, cantidad: cantWeb, tipoPase: tipoWeb, origin })
       });
       const data = await resp.json();
       if (data.url_pago) { window.location.href = data.url_pago; } 
@@ -411,7 +413,7 @@ function App() {
 
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
-    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟️️ PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟 PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
   };
 
   const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
@@ -493,7 +495,6 @@ function App() {
     );
   };
 
-  // VISTA ADMIN DASHBOARD
   if (vista === 'admin') {
     const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
     const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles.map(i => ({...i, horaVenta: v.hora}))); return acc; }, {});
@@ -515,9 +516,8 @@ function App() {
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl space-y-6">
             <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-3">{data.items.map(i => `${i.cantidad}x ${i.nombre} (${i.horaVenta || '--:--'})`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
             
-            {/* AUDITORÍA QR */}
             <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
-              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️️ QRs Emitidos (Auditoría)</h2>
+              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟️ QRs Emitidos (Auditoría)</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
                 {listasVip.length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">No se emitieron QRs.</p> : listasVip.map(l => (
                   <div key={l.id} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
@@ -541,7 +541,6 @@ function App() {
     );
   }
 
-  // VISTA PUERTA / QR
   if (vista === 'puerta' || user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     return (
@@ -591,7 +590,6 @@ function App() {
     );
   }
 
-  // VISTA BOLETERÍA
   if (vista === 'boleteria' || user.rol === 'boleteria') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
@@ -625,7 +623,6 @@ function App() {
     );
   }
 
-  // DEFAULT VIEW: POS BARRA 
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
       {barraHeader}
