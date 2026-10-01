@@ -7,7 +7,9 @@ function App() {
   const [vista, setVista] = useState(() => window.location.search.includes('tienda=true') ? 'tienda' : 'login');
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
   const [sesionActiva, setSesionActiva] = useState(null);
+  const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
   const [historial, setHistorial] = useState([]);
   const [sesionExpandida, setSesionExpandida] = useState(null);
   
@@ -32,25 +34,25 @@ function App() {
   const [transfMP, setTransfMP] = useState([]);
   const [cargandoMP, setCargandoMP] = useState(false);
 
-  const [nombreFiestaApertura, setNombreFiestaApertura] = useState('');
   const [movTipo, setMovTipo] = useState('salida');
   const [movConcepto, setMovConcepto] = useState('');
   const [movMonto, setMovMonto] = useState('');
   const [movMetodo, setMovMetodo] = useState('efectivo');
-  
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoPrecio, setNuevoPrecio] = useState('');
   const [nuevoStock, setNuevoStock] = useState('');
   const [nuevaCat, setNuevaCat] = useState('bebida');
+  const [nuevoProvNombre, setNuevoProvNombre] = useState('');
   
-  // Estados para crear Box
+  // Estados Box
   const [boxNombre, setBoxNombre] = useState('');
   const [boxDesc, setBoxDesc] = useState('');
   const [boxPrecio, setBoxPrecio] = useState('');
   const [boxImg, setBoxImg] = useState('');
-
+  
   const [precioG, setPrecioG] = useState(5000);
   const [precioV, setPrecioV] = useState(10000);
+
   const [nuevoStaffUser, setNuevoStaffUser] = useState('');
   const [nuevoStaffPass, setNuevoStaffPass] = useState('');
   const [nuevoStaffRol, setNuevoStaffRol] = useState('cajero');
@@ -119,27 +121,41 @@ function App() {
   }, [vista]);
 
   useEffect(() => {
-    const goOnline = () => setIsOnline(true); const goOffline = () => setIsOnline(false);
-    window.addEventListener('online', goOnline); window.addEventListener('offline', goOffline);
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
     return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
 
   const cargarDatos = async () => {
     if (!navigator.onLine) return; 
-    const { data: prods } = await supabase.from('bebidas').select('*').order('id'); if (prods) setBebidas(prods);
-    const { data: provs } = await supabase.from('proveedores').select('*').order('id'); if (provs) setProveedores(provs);
-    const { data: bx } = await supabase.from('boxes_web').select('*').order('precio', { ascending: true }); if (bx) setBoxesWeb(bx);
+    const { data: prods } = await supabase.from('bebidas').select('*').order('id');
+    if (prods) setBebidas(prods);
+    const { data: provs } = await supabase.from('proveedores').select('*').order('id');
+    if (provs) setProveedores(provs);
+    const { data: bx } = await supabase.from('boxes_web').select('*').order('precio', { ascending: true });
+    if (bx) setBoxesWeb(bx);
     
     if (user?.rol === 'admin') {
-      const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false }); if (hist) setHistorial(hist);
-      const { data: st } = await supabase.from('cajeros').select('*').order('id'); if (st) setStaff(st);
+      const { data: hist } = await supabase.from('sesiones').select('*').eq('estado', 'cerrada').order('id', { ascending: false });
+      if (hist) setHistorial(hist);
+      const { data: st } = await supabase.from('cajeros').select('*').order('id');
+      if (st) setStaff(st);
     }
-    if (user?.rol === 'puerta') { const { data: u } = await supabase.from('cajeros').select('*').eq('id', user.id).single(); if (u) setUser(u); }
+
+    if (user?.rol === 'puerta') {
+      const { data: u } = await supabase.from('cajeros').select('*').eq('id', user.id).single();
+      if (u) setUser(u); 
+    }
 
     const { data: sesionData } = await supabase.from('sesiones').select('*').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
     const sesion = sesionData && sesionData.length > 0 ? sesionData[0] : null;
+    
     if (sesion) {
-      setSesionActiva(sesion); setPrecioG(sesion.precio_general || 5000); setPrecioV(sesion.precio_vip || 10000);
+      setSesionActiva(sesion);
+      setPrecioG(sesion.precio_general || 5000);
+      setPrecioV(sesion.precio_vip || 10000);
       const { data: v } = await supabase.from('ventas').select('*').eq('sesion_id', sesion.id);
       const { data: m } = await supabase.from('movimientos').select('*').eq('sesion_id', sesion.id);
       const { data: p } = await supabase.from('puerta').select('*').eq('sesion_id', sesion.id);
@@ -161,27 +177,69 @@ function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'movimientos' }, () => cargarDatos())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bebidas' }, () => cargarDatos())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'boxes_web' }, () => cargarDatos())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cajeros' }, () => cargarDatos()).subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sesiones' }, () => cargarDatos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cajeros' }, () => cargarDatos())
+      .subscribe();
     return () => { supabase.removeChannel(radar); };
   }, [user, isOnline]);
 
+  useEffect(() => {
+    const syncOfflineData = async () => {
+      if (!navigator.onLine) return;
+      let vOffline = JSON.parse(localStorage.getItem('ventasOffline') || '[]');
+      let pOffline = JSON.parse(localStorage.getItem('puertaOffline') || '[]');
+      let synced = false;
+      
+      if (vOffline.length > 0) {
+        const { error } = await supabase.from('ventas').insert(vOffline);
+        if (!error) { 
+          let itemsVendidos = {};
+          vOffline.forEach(venta => { venta.detalles.forEach(item => { if (!itemsVendidos[item.id]) itemsVendidos[item.id] = 0; itemsVendidos[item.id] += item.cantidad; }); });
+          for (const id of Object.keys(itemsVendidos)) { const { data: drink } = await supabase.from('bebidas').select('stock').eq('id', id).single(); if (drink) { await supabase.from('bebidas').update({ stock: drink.stock - itemsVendidos[id] }).eq('id', id); } }
+          localStorage.setItem('ventasOffline', '[]'); synced = true; 
+        }
+      }
+      if (pOffline.length > 0) {
+        const { error } = await supabase.from('puerta').insert(pOffline);
+        if (!error) { localStorage.setItem('puertaOffline', '[]'); synced = true; }
+      }
+      if (synced) cargarDatos();
+    };
+    const interval = setInterval(syncOfflineData, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const cargarTransferenciasMP = async () => {
-    if (!isOnline) return alert("Sin internet."); setCargandoMP(true);
-    try { const res = await fetch('/api/mp-transferencias'); const data = await res.json(); if (Array.isArray(data)) setTransfMP(data); } catch (error) { alert("Error de red."); }
+    if (!isOnline) return alert("Necesitas internet para verificar Mercado Pago.");
+    setCargandoMP(true);
+    try {
+      const res = await fetch('/api/mp-transferencias');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setTransfMP(data);
+      } else {
+        alert("Error de credenciales al conectar con MP.");
+      }
+    } catch (error) {
+      alert("Fallo de red al buscar pagos.");
+    }
     setCargandoMP(false);
   };
 
   const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
   const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + ((c.cantidad||1) * c.costo), 0) - (p.descuento || 0)), 0);
+  
   const totalEfecVentas = ventasSesion.filter(v => v.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.total), 0);
   const totalTransfVentas = ventasSesion.filter(v => v.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.total), 0);
   const totalFiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente').reduce((a, c) => a + Number(c.total), 0);
+
   const totalEfecPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.total), 0);
   const totalTransfPuerta = puertaSesion.filter(p => p.tipo === 'venta' && p.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.total), 0);
   const entradasExtraEfec = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.monto), 0);
   const entradasExtraTransf = movsSesion.filter(m => m.tipo === 'entrada' && m.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.monto), 0);
   const salidasEfec = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.monto), 0);
   const salidasTransf = movsSesion.filter(m => m.tipo === 'salida' && m.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.monto), 0);
+  
   const CAJA_FISICA = totalEfecVentas + totalEfecPuerta + entradasExtraEfec - salidasEfec;
   const CAJA_BANCO = totalTransfVentas + totalTransfPuerta + entradasExtraTransf - salidasTransf;
   const TOTAL_NETO = CAJA_FISICA + CAJA_BANCO;
@@ -193,18 +251,25 @@ function App() {
   const precioActualTaquilla = tipoEntradaVenta === 'General' ? (sesionActiva?.precio_general || 5000) : (sesionActiva?.precio_vip || 10000);
 
   const handleLogin = async (e) => { 
-    e.preventDefault(); if (!isOnline) return alert("❌ Sin internet."); setLoading(true); 
+    e.preventDefault(); 
+    if (!isOnline) return alert("❌ Necesitas internet para iniciar sesión.");
+    setLoading(true); 
     const { data, error } = await supabase.from('cajeros').select('*').eq('usuario', document.getElementById('username').value).eq('password', document.getElementById('password').value).single(); 
     setLoading(false); 
-    if (error || !data) alert('❌ Credenciales incorrectas'); 
-    else { setUser(data); await cargarDatos(); if (data.rol === 'admin') setVista('admin'); else if (data.rol === 'puerta') setVista('puerta'); else if (data.rol === 'boleteria') setVista('boleteria'); else setVista('pos'); } 
+    if (error || !data) alert('❌ Error: Usuario o Contraseña incorrectos'); 
+    else { 
+      setUser(data); await cargarDatos(); 
+      if (data.rol === 'admin') setVista('admin'); else if (data.rol === 'puerta') setVista('puerta'); else if (data.rol === 'boleteria') setVista('boleteria'); else setVista('pos'); 
+    } 
   };
 
   const handleComprarEntrada = async (e) => {
-    e.preventDefault(); if (!nombreWeb.trim()) return alert("Ingresa tu nombre"); setLoading(true);
+    e.preventDefault();
+    if (!nombreWeb.trim()) return alert("Ingresa tu nombre y apellido");
+    setLoading(true);
     const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
     localStorage.setItem('compra_pendiente', JSON.stringify({ nombre: nombreWeb, tipo: tipoWeb, cantidad: cantWeb }));
-    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()}`, precio * cantWeb, cantWeb, tipoWeb);
+    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio * cantWeb, cantWeb, tipoWeb);
   };
 
   const handleComprarBox = async (box) => {
@@ -217,10 +282,17 @@ function App() {
 
   const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase) => {
     try {
-      const resp = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ titulo, precio: precioTotal/cant, cantidad: cant, tipoPase, origin: window.location.origin + '/?tienda=true' }) });
+      const resp = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titulo, precio: precioTotal/cant, cantidad: cant, tipoPase, origin: window.location.origin + '/?tienda=true' })
+      });
       const data = await resp.json();
-      if (data.url_pago) window.location.href = data.url_pago; else { alert("Error al conectar con MP."); setLoading(false); }
-    } catch(e) { alert("Error de red"); setLoading(false); }
+      if (data.url_pago) { window.location.href = data.url_pago; } 
+      else { alert("Error al conectar con Mercado Pago. Revisa las credenciales."); setLoading(false); }
+    } catch(e) {
+      console.error(e); alert("Error de red"); setLoading(false);
+    }
   };
 
   const descargarInvitacion = (qrData) => { 
@@ -228,10 +300,12 @@ function App() {
     const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
     ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
     ctx.fillStyle = '#10b981'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; 
-    ctx.fillText(`FIESTA: ${(qrData.fiesta || sesionActiva?.nombre_fiesta || '').toUpperCase()}`, 540, 150, 900); 
+    const textoFiesta = `FIESTA: ${(qrData.fiesta || sesionActiva?.nombre_fiesta || '').toUpperCase()}`;
+    ctx.fillText(textoFiesta, 540, 150, 900); 
     ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; ctx.fillText('GJBROSS', 540, 250); 
     ctx.fillStyle = '#ffffff'; ctx.font = 'bold 120px sans-serif'; 
-    ctx.fillText(qrData.tipo_pase === 'box' ? 'BOX VIP' : (qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR'), 540, 420); 
+    const textoPase = qrData.tipo_pase === 'box' ? 'BOX VIP' : (qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR');
+    ctx.fillText(textoPase, 540, 420); 
     ctx.fillStyle = '#fbbf24'; ctx.font = '60px sans-serif'; ctx.fillText(qrData.nombre.toUpperCase(), 540, 600, 900); 
     ctx.fillStyle = '#9ca3af'; ctx.font = '40px sans-serif'; ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 680); 
     const img = new Image(); img.crossOrigin = 'Anonymous'; 
@@ -240,19 +314,22 @@ function App() {
         ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 60px sans-serif'; ctx.fillText(qrData.codigo, 540, 1500); 
         ctx.fillStyle = '#9ca3af'; ctx.font = '35px sans-serif'; ctx.fillText('Presenta este código en la puerta', 540, 1750); 
         const link = document.createElement('a'); link.download = `Invitacion_${qrData.tipo_pase||'vip'}_${qrData.nombre}.png`; link.href = canvas.toDataURL('image/png'); link.click(); 
-    }; img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`; 
+    }; 
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`; 
   };
 
   const modalQRComponent = qrGenerado ? (
     <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-[0_0_50px_rgba(147,51,234,0.7)] relative overflow-hidden">
-        <h2 className="text-4xl font-black text-black uppercase mb-1">¡CREADO!</h2>
-        <div className="bg-gray-100 p-4 rounded-2xl border border-dashed mb-6 mt-4">
+        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-purple-900 to-transparent opacity-20 pointer-events-none"></div>
+        <h2 className="text-4xl font-black text-black uppercase mb-1 tracking-tighter">¡CREADO!</h2>
+        <p className="text-purple-600 font-black uppercase text-sm mb-6">{qrGenerado.fiesta || sesionActiva?.nombre_fiesta}</p>
+        <div className="bg-gray-100 p-4 rounded-2xl border border-dashed border-gray-300 mb-6">
           <p className="font-black text-2xl text-black uppercase line-clamp-1">{qrGenerado.nombre}</p>
-          <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'box' ? '🛋️ BOX VIP' : '🎫 ACCESO'} ({qrGenerado.cantidad} pers)</p>
+          <p className="text-gray-600 font-bold text-lg mt-1">{qrGenerado.tipo_pase === 'box' ? '🛋️ BOX VIP' : (qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ACCESO QR')} ({qrGenerado.cantidad} pers)</p>
         </div>
-        <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg mb-3">⬇️ Descargar Invitación</button>
-        <button onClick={() => setQrGenerado(null)} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase">Cerrar</button>
+        <button onClick={() => descargarInvitacion(qrGenerado)} className="w-full bg-black text-white py-4 rounded-xl font-black text-lg uppercase shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mb-3">⬇️ Descargar Invitación</button>
+        <button onClick={() => { setQrGenerado(null); }} className="w-full bg-gray-200 text-gray-600 py-3 rounded-xl font-bold uppercase transition active:scale-95">Cerrar</button>
       </div>
     </div>
   ) : null;
@@ -260,40 +337,117 @@ function App() {
   const renderModalValidacionMP = () => {
     if (!modalMP) return null;
     return (
-      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Buscando...' : '🔄 Actualizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase">Ver MP Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center"><div className="flex-1 pr-2"><p className="font-bold text-white text-sm line-clamp-1">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha}</p></div><span className="font-black text-green-400 text-xl">+${t.monto}</span></div>))}</div></div></div>
+      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4">
+        <div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col shadow-[0_0_40px_rgba(0,158,227,0.3)]">
+          <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3">
+            <h2 className="text-lg font-black uppercase text-[#009EE3] flex items-center gap-2">📱 Pagos Recientes</h2>
+            <button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl transition">✖</button>
+          </div>
+          <div className="flex gap-2 mb-4">
+            <button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase transition active:scale-95 shadow-lg text-sm">
+              {cargandoMP ? 'Buscando...' : '🔄 Actualizar'}
+            </button>
+            <button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl transition active:scale-95 shadow-lg text-[10px] uppercase leading-tight text-center border border-gray-600">
+              Ver MP<br/>Oficial
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+            {transfMP.length === 0 && !cargandoMP ? (
+              <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros recientes o<br/>toca "Actualizar".</p>
+            ) : (
+              transfMP.map(t => (
+                <div key={t.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 flex justify-between items-center shadow-inner">
+                  <div className="flex-1 pr-2">
+                    <p className="font-bold text-white text-sm line-clamp-1">{t.descripcion}</p>
+                    {t.email && <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-wider">{t.fecha} • {t.email}</p>}
+                    {!t.email && <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-wider">{t.fecha}</p>}
+                  </div>
+                  <span className="font-black text-green-400 text-xl">+${t.monto}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
     );
   };
 
   if (vista === 'tienda') {
     return (
-      <div className="min-h-screen bg-gray-900 flex flex-col p-2 lg:p-8 relative">
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-start p-2 lg:p-8 relative">
         {modalQRComponent}
-        {loading && <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center"><div className="text-white font-black text-2xl animate-pulse">Procesando...</div></div>}
-        <div className="max-w-4xl mx-auto w-full">
-          <div className="text-center mb-6 pt-4"><h1 className="text-4xl md:text-5xl font-black text-white tracking-widest uppercase">GJBROSS</h1><p className="text-[#009EE3] font-bold mt-1 tracking-widest">BOLETERÍA OFICIAL</p></div>
-          <div className="flex gap-2 mb-6 bg-gray-800 p-2 rounded-2xl"><button onClick={()=>setTabTienda('entradas')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tabTienda==='entradas'?'bg-[#009EE3] text-white':'text-gray-400'}`}>🎫 Entradas</button><button onClick={()=>setTabTienda('boxes')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tabTienda==='boxes'?'bg-red-600 text-white':'text-gray-400'}`}>🛋️ Boxes VIP</button></div>
+        {loading && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
+            <div className="text-white font-black text-2xl animate-pulse flex flex-col items-center gap-4">
+              <span className="text-4xl">⏳</span> Procesando...
+            </div>
+          </div>
+        )}
+        <div className="w-full max-w-6xl mx-auto">
+          <div className="text-center mb-6 pt-4">
+            <h1 className="text-4xl md:text-5xl font-black text-white tracking-widest uppercase shadow-black drop-shadow-lg">GJBROSS</h1>
+            <p className="text-[#009EE3] font-bold mt-1 tracking-widest uppercase">BOLETERÍA OFICIAL</p>
+          </div>
+
+          <div className="flex gap-2 mb-6 max-w-md mx-auto bg-gray-800 p-2 rounded-2xl shadow-lg border border-gray-700">
+            <button onClick={() => setTabTienda('entradas')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tabTienda === 'entradas' ? 'bg-[#009EE3] text-white shadow-md' : 'text-gray-400 hover:text-white'}`}>🎫 Entradas</button>
+            <button onClick={() => setTabTienda('boxes')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tabTienda === 'boxes' ? 'bg-red-600 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}>🛋️ Boxes VIP</button>
+          </div>
           
           {tabTienda === 'entradas' ? (
-            <div className="bg-gray-800 p-8 rounded-3xl shadow-2xl max-w-md mx-auto border border-gray-700">
+            <div className="bg-gray-800 p-8 rounded-3xl shadow-2xl max-w-md mx-auto border border-gray-700 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#009EE3] to-purple-600"></div>
               <form onSubmit={handleComprarEntrada} className="space-y-6">
-                <div><label className="text-xs text-gray-400 font-bold uppercase mb-1">Nombre Titular</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold" placeholder="Ej: Gabriel Roa" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
-                <div><label className="text-xs text-gray-400 font-bold uppercase mb-1">Entrada</label><div className="flex gap-2"><button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs">${preciosWeb.general}</span></button><button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP<br/><span className="text-xs">${preciosWeb.vip}</span></button></div></div>
-                <div><label className="text-xs text-gray-400 font-bold uppercase mb-1">Cantidad</label><div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">+</button></div></div>
-                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 uppercase block">Total a Pagar</span><span className="text-4xl font-black text-green-400">${(tipoWeb==='general'?preciosWeb.general:preciosWeb.vip) * cantWeb}</span></div>
-                <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl uppercase">Pagar con MP</button>
+                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: Gabriel Roa" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
+                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Tipo de Entrada</label>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
+                    <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
+                  </div>
+                </div>
+                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Cantidad</label>
+                  <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl">+</button></div>
+                </div>
+                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${(tipoWeb==='general'?preciosWeb.general:preciosWeb.vip) * cantWeb}</span></div>
+                <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2">Pagar con Mercado Pago</button>
               </form>
             </div>
           ) : (
-            <div className="space-y-6">
-              <div className="bg-red-900/40 border border-red-800 p-4 rounded-2xl text-center shadow-lg"><h3 className="text-lg font-black text-red-400 uppercase tracking-widest">TODOS LOS BOX INCLUYEN:</h3><p className="text-sm font-bold text-gray-300 mt-2">10 PULSERAS DE ACCESO • SOFÁ EXCLUSIVO & MESA • ZONA BOX GJBROSS</p></div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="space-y-8 animate-fade-in pb-10">
+              <div className="bg-gradient-to-r from-red-900/40 to-black border border-red-800 p-6 rounded-3xl text-center shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-1 bg-red-600"></div>
+                <h3 className="text-2xl font-black text-white uppercase tracking-widest drop-shadow-md">TODOS LOS BOX INCLUYEN:</h3>
+                <div className="flex flex-wrap justify-center gap-4 mt-4 text-sm font-bold text-gray-300">
+                  <span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">🎟️ 10 PULSERAS DE ACCESO</span>
+                  <span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">🛋️ SOFÁ EXCLUSIVO & MESA</span>
+                  <span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">👑 ZONA BOX GJBROSS</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {boxesWeb.map(box => (
-                  <div key={box.id} className="bg-gray-800 border-2 border-red-900/50 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
-                    {box.imagen_url ? <img src={box.imagen_url} alt={box.nombre} className="w-full h-48 object-cover border-b-2 border-red-900" /> : <div className="w-full h-32 bg-gray-900 flex items-center justify-center border-b-2 border-red-900 text-4xl">🛋️</div>}
-                    <div className="p-5 flex-1 flex flex-col">
-                      <h3 className="text-xl font-black text-white uppercase">{box.nombre}</h3>
-                      <div className="mt-3 flex-1"><p className="text-sm font-bold text-gray-400 uppercase leading-relaxed whitespace-pre-line">{box.descripcion}</p></div>
-                      <div className="mt-4 pt-4 border-t border-gray-700 flex justify-between items-center"><span className="text-2xl font-black text-red-500">${box.precio}</span><button onClick={()=>handleComprarBox(box)} className="bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-[0_0_15px_rgba(220,38,38,0.5)]">Reserva</button></div>
+                  <div key={box.id} className="bg-gray-800 border-2 border-red-900/30 hover:border-red-500 rounded-3xl overflow-hidden shadow-2xl flex flex-col transition duration-300 hover:-translate-y-1">
+                    {box.imagen_url ? (
+                      <img src={box.imagen_url} alt={box.nombre} className="w-full h-56 object-cover border-b-4 border-black" />
+                    ) : (
+                      <div className="w-full h-56 bg-gradient-to-b from-gray-900 to-black flex items-center justify-center border-b-4 border-black text-6xl shadow-inner">🛋️</div>
+                    )}
+                    <div className="p-6 flex-1 flex flex-col relative">
+                      <div className="absolute -top-6 right-4 bg-red-600 text-white font-black px-4 py-1 rounded-full text-lg shadow-lg border-2 border-black transform rotate-3">
+                        VIP
+                      </div>
+                      <h3 className="text-2xl font-black text-white uppercase pr-10">{box.nombre}</h3>
+                      <div className="mt-4 flex-1">
+                        <p className="text-sm font-bold text-gray-400 uppercase leading-relaxed whitespace-pre-line bg-black/30 p-4 rounded-xl border border-gray-700 shadow-inner">
+                          {box.descripcion}
+                        </p>
+                      </div>
+                      <div className="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center">
+                        <span className="text-3xl font-black text-red-500 drop-shadow-md">${box.precio}</span>
+                        <button onClick={() => handleComprarBox(box)} className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-[0_0_15px_rgba(220,38,38,0.4)] transition active:scale-95 border border-red-400">
+                          Reserva
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -307,51 +461,389 @@ function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4 flex-col">{modalQRComponent}
+      <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4 flex-col">
+        {modalQRComponent}
         <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 relative">
+          {!isOnline && <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg">SIN INTERNET</div>}
           <div className="text-center mb-8"><h1 className="text-4xl font-black text-purple-500 tracking-widest">GJBROSS</h1><p className="text-white tracking-widest text-sm mt-1">SISTEMA POS</p></div>
-          <form onSubmit={handleLogin} className="space-y-6"><input type="text" id="username" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white" placeholder="Usuario Staff" required /><input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white" placeholder="********" required /><button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-lg">ENTRAR</button></form>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <input type="text" id="username" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="Usuario Staff" required />
+            <input type="password" id="password" className="w-full px-4 py-3 rounded-lg bg-gray-700 text-white focus:outline-none" placeholder="********" required />
+            <button type="submit" disabled={loading} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-lg shadow-lg">ENTRAR AL SISTEMA</button>
+          </form>
         </div>
       </div>
     );
   }
 
+  const pendingCount = (JSON.parse(localStorage.getItem('ventasOffline')||'[]').length) + (JSON.parse(localStorage.getItem('puertaOffline')||'[]').length);
+
   const barraHeader = (
-    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-wrap justify-between items-center mb-4 lg:rounded-xl gap-3 shadow-lg print:hidden">
-      <div><h1 className="text-xl font-black text-purple-400 tracking-wider">GJBROSS POS</h1>{sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}</div>
-      <div className="flex flex-wrap gap-2">
-        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => { setModalMP(true); cargarTransferenciasMP(); }} className="bg-[#009EE3] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">🔍 Validar MP</button>}
-        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">⚙️ Admin</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 text-black text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">🚪 QRs</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'cajero') && vista !== 'pos' && <button onClick={() => setVista('pos')} className="bg-green-600 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">🍹 Barra</button>}
-        {sesionActiva && (user.rol === 'admin' || user.rol === 'boleteria') && vista !== 'boleteria' && <button onClick={() => setVista('boleteria')} className="bg-indigo-600 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">🎟️ Taquilla</button>}
-        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase">Salir</button>
+    <header className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center mb-4 rounded-b-xl lg:rounded-xl gap-3 shadow-lg print:hidden shrink-0">
+      <div className="flex flex-col items-center md:items-start w-full md:w-auto">
+        <h1 className="text-xl font-black tracking-wider text-purple-400">GJBROSS <span className="text-white text-sm">POS</span></h1>
+        <div className="flex items-center gap-2 mt-1">
+          {sesionActiva ? <p className="text-xs text-green-400 font-bold uppercase">🟢 {sesionActiva.nombre_fiesta}</p> : <p className="text-xs text-red-400 font-bold uppercase">🔴 CAJA CERRADA</p>}
+          <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-widest ${isOnline ? 'bg-blue-900/50 text-blue-400 border border-blue-800' : 'bg-red-900/50 text-red-400 border border-red-800'}`}>{isOnline ? '🌐 Online' : '⚠️ Offline'}</span>
+          {pendingCount > 0 && <span className="text-[10px] bg-yellow-600 text-black px-2 py-0.5 rounded font-black uppercase animate-pulse">⏳ {pendingCount} PENDIENTES</span>}
+        </div>
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {(user.rol === 'admin' || user.rol === 'cajero' || user.rol === 'boleteria') && <button onClick={() => { setModalMP(true); cargarTransferenciasMP(); }} className="bg-[#009EE3] hover:bg-[#008ACA] text-white text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🔍 Validar MP</button>}
+        {user.rol === 'admin' && vista !== 'proveedores' && <button onClick={() => setVista('proveedores')} className="bg-orange-600 hover:bg-orange-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🚚 Provs</button>}
+        {user.rol === 'admin' && vista !== 'admin' && <button onClick={() => setVista('admin')} className="bg-blue-600 hover:bg-blue-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">⚙️ Admin</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'puerta') && vista !== 'puerta' && <button onClick={() => setVista('puerta')} className="bg-yellow-600 hover:bg-yellow-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition text-black">🚪 QRs</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'cajero') && vista !== 'pos' && <button onClick={() => setVista('pos')} className="bg-green-600 hover:bg-green-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🍹 Barra</button>}
+        {sesionActiva && (user.rol === 'admin' || user.rol === 'boleteria') && vista !== 'boleteria' && <button onClick={() => setVista('boleteria')} className="bg-indigo-600 hover:bg-indigo-500 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow transition">🎟️ Taquilla</button>}
+        <button onClick={() => {setUser(null); setVista('login');}} className="bg-red-900 text-[10px] sm:text-xs px-3 py-2 rounded font-bold uppercase shadow">Salir</button>
       </div>
     </header>
   );
 
-  const abrirCaja = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('sesiones').insert([{ nombre_fiesta: nombreFiestaApertura, abierta_por: user.usuario }]); await cargarDatos(); setLoading(false); setVista('admin'); };
-  const crearBoxWeb = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('boxes_web').insert([{ nombre: boxNombre.toUpperCase(), descripcion: boxDesc.toUpperCase(), precio: Number(boxPrecio), imagen_url: boxImg }]); setBoxNombre(''); setBoxDesc(''); setBoxPrecio(''); setBoxImg(''); await cargarDatos(); setLoading(false); };
-  const eliminarBoxWeb = async (id) => { if(!isOnline) return; if(window.confirm('Eliminar Box?')){ setLoading(true); await supabase.from('boxes_web').delete().eq('id',id); await cargarDatos(); setLoading(false); } };
+  const abrirCaja = async (e) => { e.preventDefault(); if(!isOnline) return alert("Conectate para abrir caja"); if (!nombreFiestaApertura) return; setLoading(true); await supabase.from('sesiones').insert([{ nombre_fiesta: nombreFiestaApertura, abierta_por: user.usuario }]); await cargarDatos(); setLoading(false); setVista('admin'); };
+  const actualizarPreciosTaquilla = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('sesiones').update({ precio_general: Number(precioG), precio_vip: Number(precioV) }).eq('id', sesionActiva.id); await cargarDatos(); setLoading(false); alert('✅ Precios de taquilla actualizados.'); };
+  const crearStaff = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('cajeros').insert([{ usuario: nuevoStaffUser, password: nuevoStaffPass, rol: nuevoStaffRol, cupo_listas: nuevoStaffRol === 'puerta' ? Number(nuevoStaffCupo) : 0 }]); setNuevoStaffUser(''); setNuevoStaffPass(''); setNuevoStaffCupo(0); await cargarDatos(); setLoading(false); alert('✅ Empleado creado exitosamente.'); };
+  const eliminarStaff = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Seguro que deseas ELIMINAR al usuario "${nombre}"?`)) { setLoading(true); await supabase.from('cajeros').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
+  const sumarCupoStaff = async (id, cupoActual, nombre) => { if(!isOnline) return; const sumar = prompt(`¿Cuántos pases VIP extras le vas a sumar a ${nombre}?`); if (sumar && !isNaN(sumar)) { await supabase.from('cajeros').update({ cupo_listas: cupoActual + Number(sumar) }).eq('id', id); cargarDatos(); } };
+  
+  const crearBoxWeb = async (e) => { 
+    e.preventDefault(); if(!isOnline) return; setLoading(true); 
+    await supabase.from('boxes_web').insert([{ nombre: boxNombre.toUpperCase(), descripcion: boxDesc.toUpperCase(), precio: Number(boxPrecio), imagen_url: boxImg }]); 
+    setBoxNombre(''); setBoxDesc(''); setBoxPrecio(''); setBoxImg(''); await cargarDatos(); setLoading(false); alert('✅ Box creado.');
+  };
+  const eliminarBoxWeb = async (id) => { if(!isOnline) return; if(window.confirm('¿Eliminar Box?')){ setLoading(true); await supabase.from('boxes_web').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
 
-  if (vista === 'admin') {
+  const saldarDeuda = async (cliente, tickets, totalDeuda) => {
+    if(!isOnline) return alert("❌ Conéctate a internet para cobrar deudas.");
+    const metodo = prompt(`Cobrar $${totalDeuda} a ${cliente}.\nEscribe "efectivo" o "transferencia":`, "efectivo");
+    if (metodo !== 'efectivo' && metodo !== 'transferencia') return;
+    setLoading(true);
+    for (let id of tickets) { await supabase.from('ventas').update({ metodo_pago: metodo, estado_pago: 'pagado' }).eq('id', id); }
+    await cargarDatos(); setLoading(false); alert(`✅ Deuda de ${cliente} saldada. La plata ya sumó en caja.`);
+  };
+
+  const venderEntradas = async (e) => { 
+    e.preventDefault(); if (!sesionActiva || cantEntradas < 1) return; setLoading(true); 
+    const total = cantEntradas * precioActualTaquilla; 
+    const horaTicket = new Date().toLocaleTimeString();
+    const nuevaEntrada = { sesion_id: sesionActiva.id, tipo: 'venta', nombre: `Pulsera ${tipoEntradaVenta}`, cantidad: cantEntradas, precio_unitario: precioActualTaquilla, total, metodo_pago: pagoEntrada, hora: horaTicket };
+    if (isOnline) { await supabase.from('puerta').insert([nuevaEntrada]); await cargarDatos(); alert(`✅ Venta Exitosa`); } 
+    else { let guardadas = JSON.parse(localStorage.getItem('puertaOffline') || '[]'); guardadas.push(nuevaEntrada); localStorage.setItem('puertaOffline', JSON.stringify(guardadas)); alert(`✅ Venta GUARDADA OFFLINE`); }
+    setCantEntradas(1); setLoading(false); 
+  };
+  
+  const generarQRLista = async (e) => { 
+    e.preventDefault(); if (!sesionActiva || !nombreLista || cantLista < 1) return; 
+    if(!isOnline) return alert("❌ Sin internet no puedes crear QRs.");
+    if (user.rol === 'puerta') { if (user.cupo_listas < cantLista) return alert(`❌ CUPO INSUFICIENTE.\nTe quedan ${user.cupo_listas} lugares pero intentas meter a ${cantLista}.`); }
+    setLoading(true); 
+    const prefijo = tipoPaseQr === 'vip' ? 'VIP-' : 'GEN-'; 
+    const codigo = prefijo + Math.random().toString(36).substr(2, 5).toUpperCase(); 
+    const hora_creacion = new Date().toLocaleTimeString();
+    const { error } = await supabase.from('listas_vip').insert([{ sesion_id: sesionActiva.id, nombre: nombreLista, cantidad: cantLista, ingresados: 0, codigo, tipo_pase: tipoPaseQr, creado_por: user.usuario, hora_creacion }]); 
+    if (!error) { 
+      if (user.rol === 'puerta') await supabase.from('cajeros').update({ cupo_listas: user.cupo_listas - cantLista }).eq('id', user.id);
+      setQrGenerado({ nombre: nombreLista, cantidad: cantLista, codigo, tipo_pase: tipoPaseQr }); setNombreLista(''); setCantLista(1); await cargarDatos(); 
+    } setLoading(false); 
+  };
+
+  const procesarEscaneoAutomatico = async (textoCodigo) => { 
+    if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
+    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟 PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+  };
+
+  const agregarAlCarrito = (producto) => { if (!producto || producto.stock <= 0) return alert('⚠️ Sin stock'); setCarrito(prev => { const existe = prev.find(item => item.id === producto.id); if (existe) { if (existe.cantidad >= producto.stock) { alert('⚠️ Supera stock'); return prev; } return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item); } else return [...prev, { ...producto, cantidad: 1 }]; }); };
+  const cambiarCantidad = (id, delta) => setCarrito(prev => prev.map(i => i.id === id ? (i.cantidad + delta > 0 ? { ...i, cantidad: i.cantidad + delta } : null) : i).filter(Boolean));
+  
+  const procesarVenta = async () => { 
+    if (carrito.length === 0 || !sesionActiva) return; 
+    if (metodoPagoPOS === 'fiado' && !nombreFiado.trim()) return alert("⚠️ Ingresa el nombre de quien saca anotado.");
+    setLoading(true); 
+    const totalVenta = carrito.reduce((a, item) => a + (item.precio * item.cantidad), 0); 
+    const horaVenta = new Date().toLocaleTimeString();
+    const nuevaVenta = { cajero: user.usuario, total: totalVenta, detalles: carrito, metodo_pago: metodoPagoPOS, sesion_id: sesionActiva.id, cliente: metodoPagoPOS === 'fiado' ? nombreFiado.trim() : '', estado_pago: metodoPagoPOS === 'fiado' ? 'pendiente' : 'pagado', hora: horaVenta };
+    if (isOnline) {
+      const { data: ventaData, error } = await supabase.from('ventas').insert([nuevaVenta]).select().single(); 
+      if (!error) { 
+        for (const item of carrito) await supabase.from('bebidas').update({ stock: item.stock - item.cantidad }).eq('id', item.id); 
+        setTicketActual({ tipo: 'venta', id: ventaData.id, fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: horaVenta, items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+        setCarrito([]); setNombreFiado(''); cargarDatos(); 
+      } 
+    } else {
+      let guardadas = JSON.parse(localStorage.getItem('ventasOffline') || '[]'); guardadas.push(nuevaVenta); localStorage.setItem('ventasOffline', JSON.stringify(guardadas));
+      setBebidas(prev => prev.map(b => { const itemCar = carrito.find(c => c.id === b.id); return itemCar ? { ...b, stock: b.stock - itemCar.cantidad } : b; }));
+      setTicketActual({ tipo: 'venta', id: "OFF-" + Date.now().toString().slice(-4), fiesta: sesionActiva.nombre_fiesta, cajero: user.usuario, fecha: horaVenta, items: [...carrito], total: totalVenta, metodo_pago: metodoPagoPOS, cliente: nuevaVenta.cliente }); 
+      setCarrito([]); setNombreFiado('');
+    }
+    setLoading(false); 
+  };
+  
+  const crearProveedor = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('proveedores').insert([{ nombre: nuevoProvNombre }]); setNuevoProvNombre(''); await cargarDatos(); setLoading(false); };
+  const eliminarProveedor = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Eliminar proveedor?`)) { setLoading(true); await supabase.from('proveedores').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
+  const guardarRegistroProv = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); const prov = proveedores.find(p => p.id === modalProv.id); let nuevoItem = { id: Date.now(), cantidad: Number(provCant || 1), costo: Number(provCosto) }; if (tipoProvReg === 'bebida') { const bebida = bebidas.find(b => b.id === Number(provBebidaId)); if(!bebida) { alert("Selecciona bebida"); setLoading(false); return; } nuevoItem = { ...nuevoItem, tipo: 'bebida', producto: bebida.nombre, bebida_id: bebida.id }; await supabase.from('bebidas').update({ stock: bebida.stock + Number(provCant) }).eq('id', bebida.id); } else nuevoItem = { ...nuevoItem, tipo: 'deuda', producto: provConceptoDeuda }; await supabase.from('proveedores').update({ compras: [...(prov.compras || []), nuevoItem] }).eq('id', prov.id); setModalProv(null); setProvCant(''); setProvCosto(''); setProvConceptoDeuda(''); await cargarDatos(); setLoading(false); };
+  const aplicarDescuentoProv = async (id, descActual) => { if(!isOnline) return; const desc = prompt('Descuento a favor ($):', descActual || 0); if (desc !== null && !isNaN(desc)) { await supabase.from('proveedores').update({ descuento: Number(desc) }).eq('id', id); cargarDatos(); } };
+  const pagarDeudaProveedor = async (prov, totalDeuda) => { if (!sesionActiva) return alert('⚠️ ABRIR CAJA primero.'); if(!isOnline) return; if (totalDeuda <= 0) return alert('Sin deuda.'); const metodo = prompt(`Pagar $${totalDeuda} a ${prov.nombre}. "efectivo" o "transferencia"`, "efectivo"); if (metodo !== 'efectivo' && metodo !== 'transferencia') return; if (window.confirm(`¿Confirmar pago con la CAJA ACTUAL?`)) { setLoading(true); await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: 'salida', concepto: `Pago Proveedor: ${prov.nombre}`, monto: totalDeuda, metodo_pago: metodo, sesion_id: sesionActiva.id }]); await supabase.from('proveedores').update({ compras: [], descuento: 0 }).eq('id', prov.id); await cargarDatos(); setLoading(false); alert('✅ Pago registrado.'); } };
+  const crearProducto = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('bebidas').insert([{ nombre: nuevoNombre, precio: Number(nuevoPrecio), stock: Number(nuevoStock), categoria: nuevaCat }]); setNuevoNombre(''); setNuevoPrecio(''); setNuevoStock(''); cargarDatos(); setLoading(false); };
+  const eliminarProducto = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Eliminar "${nombre}"?`)) { setLoading(true); await supabase.from('bebidas').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
+  const registrarMovimiento = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('movimientos').insert([{ cajero: user.usuario, tipo: movTipo, concepto: movConcepto, monto: Number(movMonto), metodo_pago: movMetodo, sesion_id: sesionActiva.id }]); setMovConcepto(''); setMovMonto(''); cargarDatos(); setLoading(false); };
+  const procesarCierre = async () => { if (!isOnline) return alert("❌ No puedes cerrar caja sin conexión a internet."); if (!window.confirm('⚠️ ¿CERRAR CAJA definitivamente?')) return; setLoading(true); let conteoProductos = {}; ventasSesion.forEach(v => { v.detalles.forEach(item => { if (!conteoProductos[item.nombre]) conteoProductos[item.nombre] = 0; conteoProductos[item.nombre] += item.cantidad; }); }); const resumenCierre = { estado: 'cerrada', cerrada_por: user.usuario, fecha_cierre: new Date().toISOString(), recaudacion_efectivo: CAJA_FISICA, recaudacion_transf: CAJA_BANCO, total_salidas: movsSesion.filter(m=>m.tipo==='salida').reduce((a,c)=>a+Number(c.monto),0), total_ingresos: movsSesion.filter(m=>m.tipo==='entrada').reduce((a,c)=>a+Number(c.monto),0), ranking_ventas: conteoProductos, personas_vendidas: personasVendidas, personas_lista: personasListaIngresadas }; await supabase.from('sesiones').update(resumenCierre).eq('id', sesionActiva.id); setTicketActual({ tipo: 'cierre', fiesta: sesionActiva.nombre_fiesta, fecha: new Date().toLocaleDateString(), hora: new Date().toLocaleTimeString(), responsable: user.usuario, ventas_efectivo: totalEfecVentas, ventas_transf: totalTransfVentas, puerta_efectivo: totalEfecPuerta, puerta_transf: totalTransfPuerta, salidas_efec: salidasEfec, salidas_transf: salidasTransf, entradas_efec: entradasExtraEfec, entradas_transf: entradasExtraTransf, cant_generales: cantGenerales, cant_vips: cantVips, fiados_pendientes: totalFiadosPendientes, ...resumenCierre }); setSesionActiva(null); setVista('admin'); setLoading(false); };
+
+  if (ticketActual) {
     return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}{renderModalValidacionMP()}{modalQRComponent}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl"><h2 className="text-xl font-black uppercase text-white mb-4">Apertura</h2><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Fiesta..." className="w-full bg-gray-700 p-4 rounded-xl font-bold text-center" value={nombreFiestaApertura} onChange={e=>setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={!isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black uppercase">Abrir Caja</button></form></div>
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl lg:col-span-2"><h2 className="text-xl font-black uppercase text-red-400 mb-4">📦 Configurar Boxes Web</h2><form onSubmit={crearBoxWeb} className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4"><input type="text" placeholder="Nombre (Ej: BOX GJBROSS 1)" className="bg-gray-700 p-3 rounded" value={boxNombre} onChange={e=>setBoxNombre(e.target.value)} required /><input type="number" placeholder="Precio $" className="bg-gray-700 p-3 rounded" value={boxPrecio} onChange={e=>setBoxPrecio(e.target.value)} required /><input type="text" placeholder="Descripción (Ej: 2 SKYY, 4 SPRITE)" className="bg-gray-700 p-3 rounded sm:col-span-2" value={boxDesc} onChange={e=>setBoxDesc(e.target.value)} required /><input type="text" placeholder="URL Imagen (Link directo JPG/PNG)" className="bg-gray-700 p-3 rounded sm:col-span-2 text-xs" value={boxImg} onChange={e=>setBoxImg(e.target.value)} /><button type="submit" disabled={!isOnline} className="bg-red-600 hover:bg-red-500 py-3 rounded font-black uppercase sm:col-span-2">Añadir Box a la Tienda</button></form><div className="max-h-[250px] overflow-y-auto space-y-2">{boxesWeb.map(b => (<div key={b.id} className="bg-gray-700 p-3 rounded flex justify-between items-center"><div><p className="font-bold text-white uppercase">{b.nombre} <span className="text-red-400">${b.precio}</span></p><p className="text-[10px] text-gray-400 uppercase">{b.descripcion}</p></div><button onClick={()=>eliminarBoxWeb(b.id)} className="text-red-500 font-bold">❌</button></div>))}</div></div>
+      <div className="min-h-screen bg-black text-white p-6 flex flex-col items-center justify-center print:bg-white print:text-black print:min-h-0 print:p-0 print:block">
+        <style>{`@media print { @page { margin: 0; size: auto; } body { margin: 0; padding: 0; background: white; } }`}</style>
+        <div className="bg-white text-black p-6 rounded w-full max-w-sm text-center font-mono border border-gray-400 print:border-none print:p-2 print:m-0 print:shadow-none print:w-full print:max-w-[80mm] mx-auto">
+          <h2 className="text-2xl font-black uppercase text-center print:text-xl">{ticketActual.tipo === 'cierre' ? 'REPORTE Z' : 'GJBROSS POS'}</h2>
+          <p className="text-sm font-bold text-center mt-1 bg-gray-200 py-1 print:text-xs print:mt-0">{ticketActual.fiesta}</p>
+          {ticketActual.tipo === 'venta' ? (
+            <>
+              <div className="text-left text-xs mb-2 mt-4 print:mt-2"><p><b>Ticket:</b> #{ticketActual.id}</p><p><b>Cajero:</b> {ticketActual.cajero}</p><p><b>Hora:</b> {ticketActual.fecha}</p></div>
+              <hr className="my-2 border-dashed border-gray-400 print:my-1" />
+              <div className="text-left space-y-1 print:space-y-0">{ticketActual.items.map((it) => (<div key={it.id} className="flex justify-between text-sm print:text-xs"><span>{it.cantidad}x {it.nombre}</span><span>${it.precio * it.cantidad}</span></div>))}</div>
+              <hr className="my-2 border-dashed border-gray-400 print:my-1" />
+              <h3 className="text-2xl font-black text-right print:text-lg">TOTAL: ${ticketActual.total}</h3>
+              <p className={`text-xs text-center mt-2 font-bold py-1 uppercase border border-dashed print:mt-1 print:border-black ${ticketActual.metodo_pago === 'fiado' ? 'bg-red-600 text-white print:bg-white print:text-black' : 'bg-black text-white print:bg-white print:text-black'}`}>METODO: {ticketActual.metodo_pago} {ticketActual.cliente ? `(${ticketActual.cliente})` : ''}</p>
+            </>
+          ) : (
+            <>
+              <div className="text-left text-xs space-y-1 mt-4 mb-2 print:mt-2 print:mb-1"><p><b>Cierre:</b> {ticketActual.fecha} - {ticketActual.hora}</p><p><b>Resp:</b> {ticketActual.responsable}</p></div>
+              <hr className="border-black my-2 print:my-1" />
+              <h4 className="font-bold text-xs text-left uppercase mb-1">Métricas de Puerta</h4>
+              <div className="text-left text-xs space-y-1 bg-gray-100 p-2 border border-dashed print:p-1 print:space-y-0 print:bg-white print:border-black"><div className="flex justify-between"><span>Vendidas (Generales):</span><span className="font-bold">{ticketActual.cant_generales} pers.</span></div><div className="flex justify-between"><span>Vendidas (VIPs):</span><span className="font-bold">{ticketActual.cant_vips} pers.</span></div><div className="flex justify-between text-red-600 print:text-black"><span>Listas Gratis Ingresadas:</span><span className="font-bold">{ticketActual.personas_lista} pers.</span></div><div className="flex justify-between text-sm font-black mt-1 print:text-xs"><span>TOTAL ADENTRO:</span><span>{ticketActual.personas_vendidas + ticketActual.personas_lista} pers.</span></div></div>
+              <hr className="border-black my-2 print:my-1" />
+              <div className="text-left text-xs space-y-1 print:space-y-0"><div className="flex justify-between font-bold"><span>Total Ventas:</span><span>${ticketActual.ventas_efectivo + ticketActual.ventas_transf + ticketActual.puerta_efectivo + ticketActual.puerta_transf}</span></div><div className="flex justify-between text-yellow-600 print:text-black"><span>Fiados (Sin cobrar):</span><span>${ticketActual.fiados_pendientes}</span></div><div className="flex justify-between text-green-600 print:text-black"><span>Entradas extra:</span><span>+${ticketActual.entradas_efec + ticketActual.entradas_transf}</span></div><div className="flex justify-between text-red-600 print:text-black"><span>Salidas caja:</span><span>-${ticketActual.salidas_efec + ticketActual.salidas_transf}</span></div></div>
+              <hr className="my-3 border-black print:my-1" />
+              <div className="bg-black text-white p-2 text-left text-sm space-y-1 print:bg-white print:text-black print:p-1 print:space-y-0"><div className="flex justify-between text-gray-300 print:text-black"><span>Rendir EFECTIVO:</span><span>${ticketActual.recaudacion_efectivo}</span></div><div className="flex justify-between text-gray-300 print:text-black"><span>Rendir BANCO:</span><span>${ticketActual.recaudacion_transf}</span></div><hr className="border-gray-500 my-1 print:border-black"/><div className="flex justify-between"><span className="font-bold uppercase">Neto:</span><span className="text-xl font-black print:text-lg">${ticketActual.recaudacion_efectivo + ticketActual.recaudacion_transf}</span></div></div>
+            </>
+          )}
         </div>
-        <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl mb-6"><h2 className="text-xl font-black uppercase text-white mb-4">Gestión General (Resumida)</h2><p className="text-gray-400 text-sm">El resto del panel Admin sigue funcionando igual (Historial, Productos, Staff, etc).</p></div>
+        <div className="mt-6 flex space-x-4 print:hidden"><button onClick={() => { window.print(); setTicketActual(null); }} className="bg-green-600 px-6 py-3 rounded-lg font-black uppercase text-sm">🖨️ Imprimir Ticket</button><button onClick={() => setTicketActual(null)} className="bg-purple-600 px-6 py-3 rounded-lg font-black uppercase text-sm">➡️ Continuar</button></div>
       </div>
     );
   }
 
-  // Las otras vistas (POS, PUERTA, BOLETERIA) siguen intactas para no extender el código en exceso.
-  // Como solo pediste integrar los Boxes en Tienda y Admin, el resto de componentes operan igual.
+  const renderDetallesModal = () => {
+    if (!verDetalleModal) return null;
+    return (
+      <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col"><h2 className="text-xl font-black uppercase mb-4 text-purple-400 border-b border-gray-700 pb-2">{verDetalleModal === 'entrada' ? 'Ingresos Extra' : verDetalleModal === 'salida' ? 'Salidas y Gastos' : verDetalleModal === 'ventas_efectivo' ? 'Ventas en Efectivo' : 'Ventas por Transferencia'}</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{(() => { let datos = []; let esVenta = false; if (verDetalleModal === 'entrada') datos = movsSesion.filter(m => m.tipo === 'entrada'); else if (verDetalleModal === 'salida') datos = movsSesion.filter(m => m.tipo === 'salida'); else if (verDetalleModal === 'ventas_efectivo') { datos = ventasSesion.filter(v => v.metodo_pago === 'efectivo'); esVenta = true; } else if (verDetalleModal === 'ventas_transferencia') { datos = ventasSesion.filter(v => v.metodo_pago === 'transferencia'); esVenta = true; } if (datos.length === 0) return <p className="text-gray-500 text-center py-4">No hay registros.</p>; return datos.map(d => (<div key={d.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center text-sm border border-gray-600"><div className="flex-1 pr-2">{esVenta ? (<><p className="font-bold text-xs text-gray-300">Tk #{d.id} - 👤 {d.cajero} - 🕒 {d.hora || '--:--'}</p><p className="text-xs text-gray-400 italic line-clamp-1 mt-1">{d.detalles.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}</p></>) : (<><p className="font-bold text-sm text-white">{d.concepto}</p><p className="text-xs text-gray-400 uppercase">Vía: {d.metodo_pago}</p></>)}</div><span className={`font-black text-lg ${verDetalleModal === 'salida' ? 'text-red-400' : 'text-green-400'}`}>${esVenta ? d.total : d.monto}</span></div>)); })()}</div><button onClick={() => setVerDetalleModal(null)} className="mt-6 bg-gray-600 hover:bg-gray-500 py-3 rounded-lg font-bold w-full uppercase">Cerrar Detalle</button></div>
+      </div>
+    );
+  };
+
+  if (vista === 'admin') {
+    const fiadosPendientes = ventasSesion.filter(v => v.metodo_pago === 'fiado' && v.estado_pago === 'pendiente');
+    const deudores = fiadosPendientes.reduce((acc, v) => { if (!acc[v.cliente]) acc[v.cliente] = { total: 0, tickets: [], items: [] }; acc[v.cliente].total += Number(v.total); acc[v.cliente].tickets.push(v.id); acc[v.cliente].items.push(...v.detalles.map(i => ({...i, horaVenta: v.hora}))); return acc; }, {});
+    if (!sesionActiva) return (<div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">{barraHeader}{renderModalValidacionMP()}<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6"><div className="lg:col-span-1"><div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"><h2 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-widest">Apertura</h2><p className="text-gray-400 text-sm mb-6 text-center">Inicia un turno para habilitar la barra.</p><form onSubmit={abrirCaja} className="space-y-4"><input type="text" placeholder="Ej: Fiesta Halloween..." className="w-full bg-gray-700 p-4 rounded-xl font-black text-white text-center text-lg focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreFiestaApertura} onChange={e => setNombreFiestaApertura(e.target.value)} required /><button type="submit" disabled={loading || !isOnline} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-black text-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] disabled:opacity-50">🔓 ABRIR CAJA</button></form></div></div><div className="lg:col-span-2"><div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex flex-col h-[70vh]"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres</h2><div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">{historial.length === 0 ? <p className="text-gray-500 text-center py-10">No hay cierres.</p> : historial.map(h => (<div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition"><div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}><div><h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3><p className="text-xs text-gray-400 mt-1">📅 {new Date(h.fecha_cierre).toLocaleDateString()} - 👤 {h.cerrada_por}</p></div><div className="text-right"><p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo) + Number(h.recaudacion_transf)}</p><p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Detalles'}</p></div></div>{sesionExpandida === h.id && (<div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6"><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700"><div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div><div className="flex justify-between"><span>Transferencias:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div><hr className="border-gray-600 my-1" /><div className="flex justify-between"><span>Total Personas:</span><span className="font-bold text-purple-400">{h.personas_vendidas + h.personas_lista}</span></div><div className="flex justify-between"><span>(Vendidas / Gratis):</span><span className="text-gray-400 text-xs">({h.personas_vendidas} / {h.personas_lista})</span></div></div></div><div><h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top Bebidas</h4><div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">{h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (<div key={nombre} className="flex justify-between border-b border-gray-700 pb-1"><span className="truncate pr-2 text-gray-300">{nombre}</span><span className="font-black text-yellow-400">{cant}x</span></div>))) : <span className="text-gray-500 text-xs">Sin datos.</span>}</div></div></div>)}</div>))}</div></div></div></div></div>);
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 relative">
+        {barraHeader}
+        {renderDetallesModal()}
+        {renderModalValidacionMP()}
+        {modalQRComponent}
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+          <div className="bg-green-900/30 p-5 rounded-2xl border border-green-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total General Neto</h2><p className="text-4xl font-black text-green-400">${TOTAL_NETO}</p></div>
+          <div onClick={() => setVerDetalleModal('ventas_efectivo')} className="bg-blue-900/30 p-5 rounded-2xl border border-blue-800 flex flex-col justify-center cursor-pointer hover:bg-blue-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Caja (Físico)</h2><p className="text-3xl font-black text-blue-400">${CAJA_FISICA}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div>
+          <div onClick={() => setVerDetalleModal('ventas_transferencia')} className="bg-purple-900/30 p-5 rounded-2xl border border-purple-800 flex flex-col justify-center cursor-pointer hover:bg-purple-900/50 transition shadow-lg group"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1 group-hover:text-white transition">Banco / MP (Digital)</h2><p className="text-3xl font-black text-purple-400">${CAJA_BANCO}</p><p className="text-[10px] text-gray-500 mt-2 underline uppercase">Ver tickets</p></div>
+          <div className="bg-orange-900/30 p-5 rounded-2xl border border-orange-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Deuda Proveedores</h2><p className="text-3xl font-black text-orange-400">${deudaProveedores}</p></div>
+          <div className="bg-red-900/30 p-5 rounded-2xl border border-red-800 flex flex-col justify-center shadow-lg"><h2 className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Cuentas x Cobrar</h2><p className="text-3xl font-black text-red-400">${totalFiadosPendientes}</p></div>
+        </div>
+        
+        {/* PANEL ADMIN DE BOXES VIP */}
+        <div className="bg-gradient-to-r from-gray-800 to-red-900/20 p-6 rounded-2xl border border-red-900/50 shadow-xl mb-6">
+            <h2 className="text-xl font-black uppercase text-red-400 mb-4 flex items-center gap-2">📦 Configurar Boxes Web <span className="text-xs bg-red-900 text-white px-2 py-1 rounded">Tienda Online</span></h2>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <form onSubmit={crearBoxWeb} className="lg:col-span-1 space-y-3">
+                    <input type="text" placeholder="Nombre (Ej: BOX GJBROSS 1)" className="w-full bg-gray-700 p-3 rounded font-bold" value={boxNombre} onChange={e=>setBoxNombre(e.target.value)} required />
+                    <input type="number" placeholder="Precio $" className="w-full bg-gray-700 p-3 rounded font-bold text-green-400" value={boxPrecio} onChange={e=>setBoxPrecio(e.target.value)} required />
+                    <textarea placeholder="Descripción de botellas (Ej: 2 SKYY, 4 SPRITE)" className="w-full bg-gray-700 p-3 rounded h-24 font-bold" value={boxDesc} onChange={e=>setBoxDesc(e.target.value)} required />
+                    <input type="text" placeholder="URL Imagen (Opcional)" className="w-full bg-gray-700 p-3 rounded text-xs" value={boxImg} onChange={e=>setBoxImg(e.target.value)} />
+                    <button type="submit" disabled={!isOnline} className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-xl font-black uppercase shadow-lg">Añadir Box a la Tienda</button>
+                </form>
+                <div className="lg:col-span-2 bg-gray-900/50 rounded-xl p-4 border border-gray-700 max-h-[350px] overflow-y-auto custom-scrollbar">
+                    {boxesWeb.length === 0 ? <p className="text-gray-500 text-center mt-10 font-bold uppercase">No hay Boxes en venta.</p> : 
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {boxesWeb.map(b => (
+                            <div key={b.id} className="bg-gray-800 p-4 rounded-xl border border-red-900/50 flex flex-col relative group">
+                                <button onClick={()=>eliminarBoxWeb(b.id)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 font-bold text-lg opacity-0 group-hover:opacity-100 transition">❌</button>
+                                <p className="font-black text-white uppercase text-lg leading-tight w-5/6">{b.nombre}</p>
+                                <p className="font-black text-green-400 text-xl my-1">${b.precio}</p>
+                                <p className="text-[10px] text-gray-400 uppercase font-bold whitespace-pre-line bg-gray-900 p-2 rounded flex-1">{b.descripcion}</p>
+                            </div>
+                        ))}
+                    </div>}
+                </div>
+            </div>
+        </div>
+
+        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-6 flex justify-between items-center shadow-lg"><div><h2 className="text-sm font-bold text-gray-400 uppercase mb-1">🎟️ Ventas Boletería</h2><p className="text-sm text-white"><span className="text-indigo-400 font-black">{cantGenerales}</span> Generales | <span className="text-purple-400 font-black">{cantVips}</span> VIPs</p></div><div className="text-right"><p className="text-xs text-gray-500 uppercase">Recaudado Taquilla</p><p className="text-2xl font-black text-green-400">${totalEfecPuerta + totalTransfPuerta}</p></div></div>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="space-y-6">
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl"><h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex justify-between items-center">👑 Monitor Puerta <span className="text-xs bg-green-900/40 text-green-400 px-2 py-1 rounded">Adentro: {personasListaIngresadas}</span></h2><div className="max-h-[200px] overflow-y-auto custom-scrollbar space-y-2">{listasVip.filter(l => l.ingresados > 0).length === 0 ? <p className="text-gray-500 text-sm">Nadie ha ingresado por QR aún.</p> : listasVip.filter(l => l.ingresados > 0).map(l => (<div key={l.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded-lg border border-gray-600"><span className="font-bold text-white text-sm">{l.nombre}</span><span className="font-black text-green-400 text-xs">+{l.ingresados} Adentro</span></div>))}</div></div>
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl"><h2 className="text-lg font-black uppercase text-blue-400 mb-4 flex items-center">👥 GESTIÓN DE STAFF</h2><form onSubmit={crearStaff} className="space-y-3 mb-4"><input type="text" placeholder="Nuevo Usuario" className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none text-sm" value={nuevoStaffUser} onChange={e => setNuevoStaffUser(e.target.value)} required /><div className="flex space-x-2"><input type="text" placeholder="Contraseña" className="w-1/2 bg-gray-700 p-3 rounded-lg focus:outline-none text-sm" value={nuevoStaffPass} onChange={e => setNuevoStaffPass(e.target.value)} required /><select className="w-1/2 bg-gray-700 p-3 rounded-lg focus:outline-none text-sm font-bold" value={nuevoStaffRol} onChange={e => setNuevoStaffRol(e.target.value)}><option value="cajero">Cajero (Barra)</option><option value="boleteria">Boletería</option><option value="puerta">Puerta (QR)</option></select></div>{nuevoStaffRol === 'puerta' && (<div><label className="text-xs text-yellow-400 font-bold uppercase mb-1 block">Cupo de Invitados (Listas VIP)</label><input type="number" placeholder="Ej: 50" className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none text-sm font-bold" value={nuevoStaffCupo} onChange={e => setNuevoStaffCupo(e.target.value)} required /></div>)}<button type="submit" disabled={loading || !isOnline} className="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-lg font-black uppercase text-sm disabled:opacity-50">Crear Usuario</button></form><div className="max-h-[150px] overflow-y-auto custom-scrollbar space-y-2">{staff.filter(s => s.rol !== 'admin').map(s => (<div key={s.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center text-sm"><div><p className="font-bold text-white uppercase">{s.usuario}</p><p className="text-[10px] text-gray-400 uppercase">{s.rol} {s.rol === 'puerta' ? `| Cupo: ${s.cupo_listas}` : ''}</p></div><div className="flex items-center space-x-2">{s.rol === 'puerta' && <button onClick={() => sumarCupoStaff(s.id, s.cupo_listas, s.usuario)} className="text-yellow-400 bg-gray-800 px-2 py-1 rounded text-xs font-bold hover:bg-gray-600">+ Cupo</button>}<button onClick={() => eliminarStaff(s.id, s.usuario)} className="text-red-500 hover:text-red-400 text-lg">❌</button></div></div>))}</div></div>
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl"><h2 className="text-lg font-black uppercase text-indigo-400 mb-4 flex items-center">🎟️ Precios Taquilla</h2><form onSubmit={actualizarPreciosTaquilla} className="space-y-3"><div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg"><span className="font-bold text-sm">General $</span><input type="number" className="bg-gray-800 p-2 rounded text-white font-black text-right w-24" value={precioG} onChange={e=>setPrecioG(e.target.value)} required /></div><div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg"><span className="font-bold text-sm">VIP $</span><input type="number" className="bg-gray-800 p-2 rounded text-white font-black text-right w-24" value={precioV} onChange={e=>setPrecioV(e.target.value)} required /></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-lg font-black uppercase text-sm disabled:opacity-50">Fijar Precios</button></form></div>
+            <button onClick={procesarCierre} className="w-full bg-red-600 hover:bg-red-500 py-5 rounded-2xl font-black text-xl border border-red-400 shadow-[0_0_20px_rgba(220,38,38,0.4)]">🔒 CERRAR ARQUEO Z</button>
+          </div>
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 lg:col-span-2 shadow-xl space-y-6">
+            <div className="bg-gray-900 p-6 rounded-2xl border border-red-900"><h2 className="text-lg font-black uppercase text-red-400 mb-4 flex items-center">📝 Cuentas Corrientes (Fiados)</h2>{Object.keys(deudores).length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">Nadie debe plata.</p> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">{Object.entries(deudores).map(([cliente, data]) => (<div key={cliente} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col justify-between"><div><div className="flex justify-between items-start mb-2"><span className="font-black text-white uppercase text-lg leading-tight pr-2">{cliente}</span><span className="font-black text-red-400 text-xl">-${data.total}</span></div><p className="text-xs text-gray-400 italic mb-4 line-clamp-3">{data.items.map(i => `${i.cantidad}x ${i.nombre} (${i.horaVenta || '--:--'})`).join(', ')}</p></div><button onClick={() => saldarDeuda(cliente, data.tickets, data.total)} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-black text-sm uppercase transition shadow-[0_0_10px_rgba(34,197,94,0.3)]">Cobrar Deuda</button></div>))}</div>}</div>
+            
+            <div className="bg-gray-900 p-6 rounded-2xl border border-yellow-900">
+              <h2 className="text-lg font-black uppercase text-yellow-500 mb-4 flex items-center">🎟 QRs Emitidos (Auditoría)</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                {listasVip.length === 0 ? <p className="text-gray-500 text-sm font-bold uppercase">No se emitieron QRs.</p> : listasVip.map(l => (
+                  <div key={l.id} className="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-black text-white uppercase leading-none">{l.nombre}</p>
+                      <p className="text-[10px] text-gray-400 uppercase mt-1">👤 {l.creado_por || 'App'} - 🕒 {l.hora_creacion || '--:--'}</p>
+                    </div>
+                    <span className="text-xs font-black text-yellow-500 bg-black px-2 py-1 rounded">{l.codigo}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center mt-6"><h2 className="text-lg font-black uppercase text-white">📦 Base de Datos (Menú)</h2><div className="text-right"><p className="text-[10px] text-gray-400 uppercase font-bold">Capital en Barra</p><p className="text-xl font-black text-green-400">${capitalEnBarra}</p></div></div>
+            <form onSubmit={crearProducto} className="flex flex-col sm:flex-row gap-2 bg-gray-700/50 p-3 rounded-xl border border-gray-600"><input type="text" placeholder="Nombre" className="flex-1 bg-gray-800 p-2 rounded text-sm" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} required /><input type="number" placeholder="$ Precio" className="w-full sm:w-24 bg-gray-800 p-2 rounded text-sm" value={nuevoPrecio} onChange={e => setNuevoPrecio(e.target.value)} required /><input type="number" placeholder="Stock" className="w-full sm:w-20 bg-gray-800 p-2 rounded text-sm" value={nuevoStock} onChange={e => setNuevoStock(e.target.value)} required /><select className="w-full sm:w-28 bg-gray-800 p-2 rounded text-sm" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)}><option value="bebida">Bebida</option><option value="combo">Combo</option><option value="entrada">Entrada</option></select><button type="submit" disabled={!isOnline} className="bg-purple-600 px-4 py-2 rounded font-bold text-sm disabled:opacity-50">+</button></form>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-[300px] overflow-y-auto pr-2 custom-scrollbar">{bebidas.map(b => (<div key={b.id} className={`p-4 rounded-xl border relative ${b.stock < 10 ? 'bg-red-900/10 border-red-900' : 'bg-gray-700/30 border-gray-600'}`}><button type="button" onClick={() => eliminarProducto(b.id, b.nombre)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 text-lg">❌</button><p className="font-bold text-sm mb-1 pr-6">{b.nombre}</p><div className="flex justify-between items-center mb-3"><span className="text-green-400 font-black text-lg">${b.precio}</span><span className={`font-bold text-xs bg-gray-800 px-2 py-1 rounded ${b.stock < 10 ? 'text-red-400' : 'text-gray-300'}`}>Stock: {b.stock}</span></div><div className="flex space-x-2"><button type="button" onClick={async () => { const n = prompt('Nuevo precio:', b.precio); if (n) { await supabase.from('bebidas').update({precio:Number(n)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-gray-600 py-2 rounded text-xs font-bold uppercase">Cambiar $</button><button type="button" onClick={async () => { const s = prompt(`Stock exacto:`, b.stock); if (s !== null && !isNaN(s)) { await supabase.from('bebidas').update({stock:Number(s)}).eq('id',b.id); cargarDatos();} }} className="flex-1 bg-blue-600 py-2 rounded text-xs font-bold uppercase">Mod. Stock</button></div></div>))}</div>
+            <div className="bg-gray-900 p-6 rounded-2xl border border-gray-700"><h2 className="text-lg font-black mb-4 uppercase text-yellow-400 flex items-center">💵 Registrar Movimiento</h2><form onSubmit={registrarMovimiento} className="space-y-3"><select className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={movTipo} onChange={e => setMovTipo(e.target.value)}><option value="salida">🔴 Salida (Gasto)</option><option value="entrada">🟢 Ingreso Extra</option></select><input type="text" placeholder="Concepto" className="w-full bg-gray-700 p-3 rounded-lg" value={movConcepto} onChange={e => setMovConcepto(e.target.value)} required /><div className="flex space-x-2"><input type="number" placeholder="Monto $" className="w-2/3 bg-gray-700 p-3 rounded-lg font-bold" value={movMonto} onChange={e => setMovMonto(e.target.value)} required /><select className="w-1/3 bg-gray-700 p-3 rounded-lg text-sm" value={movMetodo} onChange={e => setMovMetodo(e.target.value)}><option value="efectivo">Efectivo</option><option value="transferencia">Transf</option></select></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-yellow-600 text-black py-3 rounded-lg font-black uppercase disabled:opacity-50">Registrar</button></form></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // VISTA PUERTA / QR
+  if (vista === 'puerta' || user.rol === 'puerta') {
+    const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
+        {barraHeader}
+        {renderModalValidacionMP()}
+        {mostrarEscaner && (
+          <div className="fixed inset-0 bg-black z-[100] flex flex-col">
+            <div className="bg-gray-900 p-4 flex justify-between items-center border-b border-gray-700 pt-8">
+              <h2 className="text-xl font-black text-purple-400 tracking-widest">ESCANEAR PASE VIP</h2>
+              <button onClick={() => setMostrarEscaner(false)} className="text-red-500 font-black text-lg bg-gray-800 px-4 py-2 rounded-lg">CERRAR ✖</button>
+            </div>
+            <div className="flex-1 w-full flex items-center justify-center bg-black p-4">
+              <div className="w-full max-w-sm rounded-3xl overflow-hidden border-4 border-purple-500 shadow-[0_0_40px_rgba(147,51,234,0.4)] relative">
+                <Scanner 
+                  onScan={(r) => { 
+                    if(!r) return; 
+                    let txt = '';
+                    if (Array.isArray(r)) { txt = r[0]?.rawValue || ''; }
+                    else if (r?.text) { txt = r.text; }
+                    else if (typeof r === 'string') { txt = r; }
+                    if(txt.trim()) procesarEscaneoAutomatico(txt.trim()); 
+                  }} 
+                  onError={(e) => console.log('Error Escaner:', e)} 
+                />
+                <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none"></div>
+              </div>
+            </div>
+            <div className="p-8 bg-gray-900 text-center pb-12">
+              <p className="text-gray-400 text-sm font-bold uppercase tracking-widest">Apunta la cámara al código</p>
+            </div>
+          </div>
+        )}
+        {modalQRComponent}
+        {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2></div>) : (
+          <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {(user.rol === 'admin' || user.rol === 'puerta') && (
+              <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit"><div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div><h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>{user.rol === 'puerta' ? <p className="text-sm font-bold text-yellow-400 bg-yellow-900/30 p-2 rounded-lg mb-6 border border-yellow-800">🎟️ TU CUPO DISPONIBLE: {user.cupo_listas} Pases</p> : <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>}<form onSubmit={generarQRLista} className="space-y-6 relative z-10"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button><button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP / Accesos</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Gabriel Roa" /></div><div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4 disabled:opacity-50">Generar Pase ✨</button></form></div>
+            )}
+            <div className={`space-y-6 ${user.rol === 'puerta' ? 'lg:col-span-2 max-w-xl mx-auto w-full' : ''}`}>
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl"><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">Gratis (Adentro)</p><p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p></div><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">QRs Activos</p><p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p></div></div>
+              <div className="flex gap-3"><div className="relative flex-1"><input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} /><span className="absolute left-4 top-4 text-xl">🔍</span></div><button onClick={() => setMostrarEscaner(true)} disabled={!isOnline} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center disabled:opacity-50">📷</button></div>
+              <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl h-[60vh] flex flex-col"><h2 className="text-xl font-black uppercase text-white mb-4 border-b border-gray-700 pb-2">📋 Listas y Accesos</h2><div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">{listasFiltradas.length === 0 ? <p className="text-center text-gray-500 py-10 font-bold uppercase">No hay pases generados.</p> : listasFiltradas.map(l => (<div key={l.id} className={`p-5 rounded-2xl border-2 transition ${l.estado === 'ingresado' ? 'bg-green-900/10 border-green-900/50 opacity-50' : 'bg-gray-800 border-gray-600 shadow-lg'}`}><div className="flex justify-between items-start"><div><p className="font-black text-lg uppercase text-white leading-tight">{l.nombre}</p><p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">{l.tipo_pase} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span></p><p className="text-sm text-blue-400 font-bold mt-2">Ingresados: {l.ingresados || 0} / {l.cantidad}</p></div>{user.rol === 'admin' && (<button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg shadow transition">⬇️ QR</button>)}</div>{l.estado === 'ingresado' ? (<div className="mt-3 text-center bg-green-900/40 py-2 rounded-lg"><span className="text-green-500 font-black text-sm uppercase">✅ Completado</span></div>) : (<button onClick={() => procesarEscaneoAutomatico(l.codigo)} disabled={!isOnline} className="w-full mt-3 bg-purple-600 hover:bg-purple-500 py-3 rounded-xl font-black text-sm uppercase shadow-lg active:scale-95 transition disabled:opacity-50">Ingreso Parcial (+)</button>)}</div>))}</div></div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // VISTA BOLETERÍA
+  if (vista === 'boleteria' || user.rol === 'boleteria') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
+        {barraHeader}
+        {renderModalValidacionMP()}
+        {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>) : (
+          <div className="max-w-md mx-auto w-full mt-4 bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl"><h2 className="text-3xl font-black uppercase text-center text-indigo-400 mb-8 tracking-widest">🎟️ TAQUILLA</h2><form onSubmit={venderEntradas} className="space-y-6"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Tipo de Pulsera</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoEntradaVenta('General')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'General' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>General</button><button type="button" onClick={() => setTipoEntradaVenta('VIP')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${tipoEntradaVenta === 'VIP' ? 'bg-purple-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400'}`}>Pase VIP</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Precio Unitario Oficial ($)</label><div className="w-full bg-gray-900 p-4 rounded-xl font-black text-2xl text-center text-gray-300 border border-gray-700">${precioActualTaquilla}</div></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Cantidad a Vender</label><div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantEntradas(Math.max(1, cantEntradas - 1))} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-3xl focus:outline-none" value={cantEntradas} readOnly /><button type="button" onClick={() => setCantEntradas(cantEntradas + 1)} className="bg-gray-600 w-1/3 py-4 font-black text-3xl active:bg-gray-500 transition">+</button></div></div><div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Cobrar</span><span className="text-5xl font-black text-green-400">${cantEntradas * precioActualTaquilla}</span></div><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Método de Pago</label><div className="flex space-x-2"><button type="button" onClick={() => setPagoEntrada('efectivo')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'efectivo' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>💵 Efectivo</button><button type="button" onClick={() => setPagoEntrada('transferencia')} className={`flex-1 py-4 rounded-xl font-black uppercase transition ${pagoEntrada === 'transferencia' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'}`}>📱 Transf</button></div></div><button type="submit" disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-6 rounded-xl font-black text-2xl uppercase shadow-[0_0_20px_rgba(34,197,94,0.4)] active:scale-95 transition">✅ COBRAR</button></form></div>
+        )}
+      </div>
+    );
+  }
+
+  // VISTA PROVEEDORES
+  if (vista === 'proveedores') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8 flex flex-col">
+        {barraHeader}
+        {modalProv && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-xl border border-gray-700 w-full max-w-md"><h2 className="text-xl font-black uppercase text-orange-400 mb-4">Ingreso de: {modalProv.nombre}</h2><form onSubmit={guardarRegistroProv} className="space-y-4"><select className="w-full bg-gray-700 p-3 rounded-lg font-bold focus:outline-none" value={tipoProvReg} onChange={e => setTipoProvReg(e.target.value)}><option value="bebida">📦 Mercadería (Suma a Stock)</option><option value="deuda">📄 Deuda Extra (Ej: Flete)</option></select>{tipoProvReg === 'bebida' ? (<><select className="w-full bg-gray-700 p-3 rounded-lg focus:outline-none" value={provBebidaId} onChange={e => setProvBebidaId(e.target.value)} required><option value="">-- Selecciona producto que llegó --</option>{bebidas.map(b => <option key={b.id} value={b.id}>{b.nombre} (Stock: {b.stock})</option>)}</select><div className="flex gap-2"><input type="number" placeholder="Cant. traída" className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCant} onChange={e => setProvCant(e.target.value)} required /><input type="number" placeholder="$ Costo Unit." className="w-1/2 bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required /></div></>) : (<><input type="text" placeholder="Concepto deuda" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provConceptoDeuda} onChange={e => setProvConceptoDeuda(e.target.value)} required /><input type="number" placeholder="Monto total $" className="w-full bg-gray-700 p-3 rounded-lg font-bold" value={provCosto} onChange={e => setProvCosto(e.target.value)} required /></>)}<div className="flex space-x-2 pt-2"><button type="button" onClick={() => setModalProv(null)} className="flex-1 bg-gray-600 py-3 rounded-lg font-bold uppercase">Cancelar</button><button type="submit" disabled={loading} className="flex-1 bg-orange-600 hover:bg-orange-500 py-3 rounded-lg font-black uppercase shadow">Guardar</button></div></form></div></div>
+        )}
+        <div className="max-w-6xl mx-auto mt-6 flex-1 w-full">
+          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl mb-8 flex flex-col md:flex-row justify-between items-center gap-4"><div><h2 className="text-2xl font-black uppercase text-orange-400">🚚 Proveedores y Stock</h2><p className="text-sm text-gray-400">Al cargar mercadería acá, el stock de la barra se actualiza solo.</p></div><form onSubmit={crearProveedor} className="flex w-full md:w-auto"><input type="text" placeholder="Nombre Prov." className="w-full bg-gray-700 p-3 rounded-l-xl focus:outline-none" value={nuevoProvNombre} onChange={e => setNuevoProvNombre(e.target.value)} required /><button type="submit" className="bg-orange-600 px-6 font-bold rounded-r-xl" disabled={!isOnline}>Añadir</button></form></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-10">
+            {proveedores.map(p => {
+              const subtotal = (p.compras || []).reduce((acc, c) => acc + ((c.cantidad||1) * c.costo), 0); const totalPagar = subtotal - (p.descuento || 0);
+              return (
+                <div key={p.id} className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative flex flex-col"><button onClick={() => eliminarProveedor(p.id, p.nombre)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-xl transition">❌</button><h3 className="text-xl font-black text-white uppercase mb-4 pr-8 border-b border-gray-700 pb-2">{p.nombre}</h3><div className="bg-gray-700/50 p-3 rounded-xl flex-1 max-h-[200px] overflow-y-auto mb-4 border border-gray-600 space-y-2 custom-scrollbar">{(!p.compras || p.compras.length === 0) ? <p className="text-gray-500 text-sm text-center mt-4 font-bold uppercase">Sin deudas.</p> : p.compras.map(c => (<div key={c.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg text-sm shadow border border-gray-700"><div className="flex-1 pr-2"><p className="font-bold text-white line-clamp-1">{c.producto}</p><p className="text-[10px] text-gray-400">{c.tipo==='bebida'?`${c.cantidad}x (Stock sumado)`:'Cargo extra'}</p></div><span className="font-black text-orange-400 text-lg">${(c.cantidad||1) * c.costo}</span></div>))}</div><div className="space-y-1 mb-3 bg-gray-900 p-4 rounded-xl border border-gray-700"><div className="flex justify-between text-xs text-gray-400 font-bold"><span>Subtotal:</span><span>${subtotal}</span></div><div className="flex justify-between text-xs text-yellow-400 font-bold"><span>Descuento:</span><span>-${p.descuento || 0}</span></div><hr className="border-gray-700 my-2"/><div className="flex justify-between text-lg font-black text-white"><span>DEUDA:</span><span className="text-orange-400">${totalPagar}</span></div></div><div className="flex space-x-2 mb-3"><button onClick={() => {setModalProv(p); setTipoProvReg('bebida');}} className="flex-1 bg-gray-600 hover:bg-gray-500 py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95" disabled={!isOnline}>+ Sumar</button><button onClick={() => aplicarDescuentoProv(p.id, p.descuento)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase shadow transition active:scale-95" disabled={!isOnline}>🎁 Desc.</button></div><button onClick={() => pagarDeudaProveedor(p, totalPagar)} className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-xl font-black text-sm uppercase shadow-[0_0_15px_rgba(220,38,38,0.4)] transition active:scale-95" disabled={!isOnline}>💸 Pagar con Caja</button></div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // DEFAULT VIEW: POS BARRA 
   return (
-    <div className="h-screen bg-gray-900 text-white flex flex-col">
+    <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
       {barraHeader}
-      <div className="flex-1 flex items-center justify-center text-center"><p className="text-4xl text-green-400 font-black">Módulo de Barra OK</p></div>
+      {renderModalValidacionMP()}
+      {!sesionActiva ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">Caja Cerrada</h2></div>
+      ) : (
+        <div className="flex-1 p-2 lg:p-4 grid grid-cols-1 lg:grid-cols-3 gap-4 w-full max-w-[1400px] mx-auto lg:h-[calc(100vh-90px)] overflow-y-auto lg:overflow-hidden">
+          <div className="lg:col-span-2 space-y-3 lg:overflow-y-auto lg:pr-2 custom-scrollbar lg:h-full pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 lg:gap-3">
+              {bebidas.map((item) => (
+                <button type="button" key={item.id} onClick={() => agregarAlCarrito(item)} className={`p-3 lg:p-4 rounded-xl border text-left flex flex-col justify-between transition active:scale-95 ${item.stock > 0 ? 'bg-gray-800 border-gray-700 hover:border-purple-500' : 'bg-gray-800/40 border-gray-800 opacity-50'}`}>
+                  <div><span className="text-[10px] font-black uppercase text-purple-500 block mb-1">{item.categoria}</span><p className="font-bold text-xs lg:text-sm line-clamp-2 leading-tight">{item.nombre}</p></div>
+                  <div className="mt-2 flex justify-between items-end"><span className="text-base lg:text-lg font-black text-green-400">${item.precio}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${item.stock < 10 ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Stk: {item.stock}</span></div>
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 flex flex-col h-[500px] lg:h-full shadow-2xl">
+            <div><h2 className="text-xs uppercase font-bold text-gray-400 tracking-wider mb-2 border-b border-gray-700 pb-2">Ticket Actual</h2></div>
+            <div className="flex-1 overflow-y-auto pr-1 my-2 space-y-2 custom-scrollbar">
+              {carrito.length === 0 ? (
+                <div className="text-center py-10 text-gray-600"><p className="text-4xl mb-2">🍹</p><p className="text-xs font-bold uppercase">Toque productos para agregar</p></div>
+              ) : (
+                carrito.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between bg-gray-700/40 p-2 rounded-lg border border-gray-600">
+                    <div className="flex-1 mr-2"><p className="font-bold text-xs line-clamp-1">{item.nombre}</p><p className="text-xs text-green-400 font-black">${item.precio * item.cantidad}</p></div>
+                    <div className="flex items-center space-x-1"><button type="button" onClick={() => cambiarCantidad(item.id, -1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">-</button><span className="font-black text-sm w-4 text-center">{item.cantidad}</span><button type="button" onClick={() => cambiarCantidad(item.id, 1)} className="bg-gray-600 w-8 h-8 rounded-lg font-black text-sm active:bg-gray-500">+</button></div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-gray-700 mt-auto">
+              <div className="flex justify-between items-end mb-3"><span className="text-gray-400 uppercase text-xs font-bold">Total a Pagar</span><span className="text-3xl font-black text-green-400 leading-none">${carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0)}</span></div>
+              <div className="flex space-x-2 mb-3"><button type="button" onClick={() => setMetodoPagoPOS('efectivo')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'efectivo' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>💵 Efec</button><button type="button" onClick={() => setMetodoPagoPOS('transferencia')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'transferencia' ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📱 Transf</button><button type="button" onClick={() => setMetodoPagoPOS('fiado')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition ${metodoPagoPOS === 'fiado' ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]' : 'bg-gray-700 text-gray-400 border border-gray-600'}`}>📝 Anotar</button></div>
+              {metodoPagoPOS === 'fiado' && (<input type="text" placeholder="Nombre de quien saca anotado..." className="w-full mb-3 bg-gray-900 border border-gray-700 p-3 rounded-xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-red-500 text-center uppercase" value={nombreFiado} onChange={e => setNombreFiado(e.target.value)} required />)}
+              <button type="button" onClick={procesarVenta} disabled={carrito.length === 0 || loading} className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white font-black py-4 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.3)] transition active:scale-95 text-lg uppercase tracking-widest">{loading ? '...' : 'COBRAR'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
