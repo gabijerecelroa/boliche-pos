@@ -49,7 +49,11 @@ function App() {
   const [boxDesc, setBoxDesc] = useState('');
   const [boxPrecio, setBoxPrecio] = useState('');
   const [boxImg, setBoxImg] = useState('');
-  
+  const [boxStock, setBoxStock] = useState(10);
+  const [dniBusquedaWeb, setDniBusquedaWeb] = useState('');
+  const [buscandoQrWeb, setBuscandoQrWeb] = useState(false);
+  const WHATSAPP_SOPORTE = '5493718000000'; // <-- Puedes cambiar este número cuando quieras
+
   const [precioG, setPrecioG] = useState(5000);
   const [precioV, setPrecioV] = useState(10000);
 
@@ -94,10 +98,34 @@ function App() {
   useEffect(() => {
     const verificarPagoOnline = async () => {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('status') === 'approved' || params.get('pago') === 'exito') {
+      const status = params.get('status') || params.get('collection_status');
+      const paymentId = params.get('payment_id') || params.get('collection_id');
+
+      if (status === 'approved') {
         const pendiente = JSON.parse(localStorage.getItem('compra_pendiente'));
         if (pendiente) {
+          // Evitar duplicados si recarga la página
+          const procesados = JSON.parse(localStorage.getItem('pagos_procesados') || '[]');
+          if (paymentId && procesados.includes(paymentId)) {
+            localStorage.removeItem('compra_pendiente');
+            return;
+          }
+
           setLoading(true);
+
+          // Validación Anti-Trampa contra el Búnker de MP
+          if (paymentId) {
+            try {
+              const verif = await fetch(`/api/mp-transferencias?payment_id=${paymentId}`);
+              const verifData = await verif.json();
+              if (verifData && verifData.valido === false) {
+                setLoading(false);
+                setErrorPago(true);
+                return;
+              }
+            } catch (e) { console.log('Verificación local'); }
+          }
+
           const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
           const sId = sData && sData.length > 0 ? sData[0].id : null;
           const prefijo = pendiente.tipo === 'vip' ? 'VIP-' : (pendiente.tipo === 'box' ? 'BOX-' : 'GEN-'); 
@@ -117,7 +145,26 @@ function App() {
             creado_por: contactoWeb, 
             hora_creacion: hora 
           }]);
+
+          // IMPACTO CONTABLE EN CAJA DIGITAL (BANCO / MP) Y TAQUILLA
+          const montoTotalWeb = Number(pendiente.precio_total || 0);
+          if (sId && montoTotalWeb > 0) {
+            const etiquetaVenta = pendiente.tipo === 'box' 
+              ? `Box VIP Web (${pendiente.box_nombre})` 
+              : `Entrada ${pendiente.tipo === 'vip' ? 'VIP' : 'General'} Web`;
+            await supabase.from('puerta').insert([{
+              sesion_id: sId,
+              tipo: 'venta',
+              nombre: etiquetaVenta,
+              cantidad: Number(pendiente.cantidad),
+              precio_unitario: Math.round(montoTotalWeb / Number(pendiente.cantidad)),
+              total: montoTotalWeb,
+              metodo_pago: 'transferencia',
+              hora
+            }]);
+          }
           
+          // SI ES BOX: Guardar en Entregas Web y descontar 1 del Stock
           if (pendiente.tipo === 'box') {
             await supabase.from('reservas_boxes').insert([{ 
               sesion_id: sId, 
@@ -127,6 +174,17 @@ function App() {
               estado: 'pendiente', 
               fecha: hora 
             }]);
+            if (pendiente.box_id) {
+              const { data: bxActual } = await supabase.from('boxes_web').select('stock').eq('id', pendiente.box_id).single();
+              if (bxActual && bxActual.stock > 0) {
+                await supabase.from('boxes_web').update({ stock: bxActual.stock - 1 }).eq('id', pendiente.box_id);
+              }
+            }
+          }
+
+          if (paymentId) {
+            procesados.push(paymentId);
+            localStorage.setItem('pagos_procesados', JSON.stringify(procesados));
           }
 
           setQrGenerado({ 
@@ -144,7 +202,7 @@ function App() {
           window.history.replaceState({}, document.title, "/?tienda=true&ticket=" + codigo);
           setLoading(false);
         }
-      } else if (params.get('status') === 'rejected' || params.get('pago') === 'fallo') {
+      } else if (status === 'rejected' || params.get('pago') === 'fallo') {
         setErrorPago(true);
         window.history.replaceState({}, document.title, "/?tienda=true&pago=error");
       }
@@ -276,19 +334,22 @@ function App() {
     if (!nombreWeb.trim() || !dniWeb.trim() || !telWeb.trim()) return alert("Por favor completa Nombre, DNI y WhatsApp");
     setLoading(true);
     const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
+    const totalPagar = precio * cantWeb;
     localStorage.setItem('compra_pendiente', JSON.stringify({ 
       nombre: nombreWeb.trim(), 
       dni: dniWeb.trim(), 
       tel: telWeb.trim(), 
       tipo: tipoWeb, 
-      cantidad: cantWeb 
+      cantidad: cantWeb,
+      precio_total: totalPagar
     }));
-    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()} GJBROSS`, precio * cantWeb, cantWeb, tipoWeb);
+    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()} GJBROSS`, totalPagar, cantWeb, tipoWeb);
   };
 
   const handleComprarBox = async (e) => {
     e.preventDefault();
     if (!boxSeleccionado) return;
+    if ((boxSeleccionado.stock ?? 10) <= 0) return alert("⚠️ Este Box ya se encuentra agotado.");
     if (!nombreWeb.trim() || !dniWeb.trim() || !telWeb.trim()) return alert("Por favor completa Nombre, DNI y WhatsApp");
     setLoading(true);
     localStorage.setItem('compra_pendiente', JSON.stringify({ 
@@ -297,10 +358,45 @@ function App() {
       tel: telWeb.trim(), 
       tipo: 'box', 
       cantidad: 10, 
+      box_id: boxSeleccionado.id,
       box_nombre: boxSeleccionado.nombre, 
-      box_desc: boxSeleccionado.descripcion 
+      box_desc: boxSeleccionado.descripcion,
+      precio_total: boxSeleccionado.precio
     }));
     ejecutarPagoMP(`Reserva ${boxSeleccionado.nombre}`, boxSeleccionado.precio, 1, 'box');
+  };
+
+  const recuperarQrPorDni = async (e) => {
+    e.preventDefault();
+    if (!dniBusquedaWeb.trim()) return;
+    setBuscandoQrWeb(true);
+    const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
+    const sId = sData && sData[0] ? sData[0].id : null;
+    let query = supabase.from('listas_vip').select('*').ilike('nombre', `%${dniBusquedaWeb.trim()}%`).order('id', { ascending: false }).limit(1);
+    if (sId) query = query.eq('sesion_id', sId);
+    const { data: encontrados } = await query;
+    if (!encontrados || encontrados.length === 0) {
+      setBuscandoQrWeb(false);
+      return alert("❌ No encontramos ningún acceso activo con ese DNI.");
+    }
+    const item = encontrados[0];
+    let descBox = '';
+    if (item.tipo_pase === 'box') {
+      const { data: rBox } = await supabase.from('reservas_boxes').select('*').ilike('box_nombre', `%${item.codigo}%`).limit(1);
+      if (rBox && rBox[0]) descBox = rBox[0].descripcion;
+    }
+    setBuscandoQrWeb(false);
+    setQrGenerado({
+      nombre: item.nombre.split('|')[0].trim(),
+      dni: dniBusquedaWeb.trim(),
+      tel: (item.creado_por || '').includes('Tel:') ? item.creado_por.split('Tel:')[1].trim() : '',
+      cantidad: item.cantidad,
+      codigo: item.codigo,
+      tipo_pase: item.tipo_pase,
+      fiesta: sData && sData[0] ? sData[0].nombre_fiesta : 'FIESTA GJBROSS',
+      box_nombre: item.tipo_pase === 'box' ? 'BOX VIP' : '',
+      box_desc: descBox
+    });
   };
 
     const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase) => {
@@ -446,7 +542,18 @@ function App() {
 
   const procesarEscaneoAutomatico = async (textoCodigo) => { 
     if(!isOnline) return alert("❌ No puedes escanear QRs sin conexión a internet.");
-    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟 PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id); await supabase.from('puerta').insert([{ sesion_id: sesionActiva.id, tipo: 'lista', nombre: `Lista ${listaEncontrada.tipo_pase?.toUpperCase()||'VIP'} - ${listaEncontrada.nombre}`, cantidad: cantIngresar, precio_unitario: 0, total: 0, hora: new Date().toLocaleTimeString() }]); setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
+    setMostrarEscaner(false); const codigoLimpio = textoCodigo.trim().toUpperCase(); const listaEncontrada = listasVip.find(l => l.codigo.toUpperCase() === codigoLimpio); if (!listaEncontrada) return alert(`❌ CÓDIGO INVÁLIDO O INEXISTENTE.\n(Leído: "${codigoLimpio}")`); if (listaEncontrada.estado === 'ingresado') { alert(`⚠️ CÓDIGO COMPLETADO.\nYa entraron las ${listaEncontrada.cantidad} personas de este QR.`); setFiltroQR(codigoLimpio); return; } const yaIngresados = listaEncontrada.ingresados || 0; const disponibles = listaEncontrada.cantidad - yaIngresados; const cantIngresarStr = prompt(`🎟 PASE: ${listaEncontrada.nombre}\nQuedan disponibles: ${disponibles} (de ${listaEncontrada.cantidad}).\n¿Cuántos ingresan AHORA MISMO?`, disponibles); if (cantIngresarStr === null) return; const cantIngresar = Number(cantIngresarStr); if (isNaN(cantIngresar) || cantIngresar <= 0 || cantIngresar > disponibles) { return alert(`❌ Cantidad inválida.`); } setLoading(true); const nuevosIngresados = yaIngresados + cantIngresar; const nuevoEstado = nuevosIngresados >= listaEncontrada.cantidad ? 'ingresado' : 'pendiente'; await supabase.from('listas_vip').update({ ingresados: nuevosIngresados, estado: nuevoEstado }).eq('id', listaEncontrada.id);
+    const esCompraWeb = (listaEncontrada.creado_por || '').includes('Web') || (listaEncontrada.creado_por || '').includes('Tienda') || listaEncontrada.tipo_pase === 'box';
+    await supabase.from('puerta').insert([{ 
+      sesion_id: sesionActiva.id, 
+      tipo: esCompraWeb ? 'ingreso_web' : 'lista', 
+      nombre: `${esCompraWeb ? 'Ingreso Web' : 'Lista ' + (listaEncontrada.tipo_pase?.toUpperCase()||'VIP')} - ${listaEncontrada.nombre}`, 
+      cantidad: cantIngresar, 
+      precio_unitario: 0, 
+      total: 0, 
+      hora: new Date().toLocaleTimeString() 
+    }]);
+    setFiltroQR(''); await cargarDatos(); setLoading(false); alert(`✅ ACCESO PERMITIDO\nVIP: ${listaEncontrada.nombre}\nPASAN AHORA: ${cantIngresar}\nFaltan llegar: ${listaEncontrada.cantidad - nuevosIngresados}`); 
   };
 
   const abrirCaja = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('sesiones').insert([{ nombre_fiesta: nombreFiestaApertura, abierta_por: user.usuario }]); await cargarDatos(); setLoading(false); setVista('admin'); };
@@ -454,8 +561,24 @@ function App() {
   const crearStaff = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('cajeros').insert([{ usuario: nuevoStaffUser, password: nuevoStaffPass, rol: nuevoStaffRol, cupo_listas: nuevoStaffRol === 'puerta' ? Number(nuevoStaffCupo) : 0 }]); setNuevoStaffUser(''); setNuevoStaffPass(''); setNuevoStaffCupo(0); await cargarDatos(); setLoading(false); alert('✅ Empleado creado exitosamente.'); };
   const eliminarStaff = async (id, nombre) => { if(!isOnline) return; if (window.confirm(`¿Seguro que deseas ELIMINAR al usuario "${nombre}"?`)) { setLoading(true); await supabase.from('cajeros').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
   const sumarCupoStaff = async (id, cupoActual, nombre) => { if(!isOnline) return; const sumar = prompt(`¿Cuántos pases VIP extras le vas a sumar a ${nombre}?`); if (sumar && !isNaN(sumar)) { await supabase.from('cajeros').update({ cupo_listas: cupoActual + Number(sumar) }).eq('id', id); cargarDatos(); } };
-  const crearBoxWeb = async (e) => { e.preventDefault(); if(!isOnline) return; setLoading(true); await supabase.from('boxes_web').insert([{ nombre: boxNombre.toUpperCase(), descripcion: boxDesc.toUpperCase(), precio: Number(boxPrecio), imagen_url: boxImg }]); setBoxNombre(''); setBoxDesc(''); setBoxPrecio(''); setBoxImg(''); await cargarDatos(); setLoading(false); alert('✅ Box creado.'); };
+  const crearBoxWeb = async (e) => { 
+    e.preventDefault(); if(!isOnline) return; setLoading(true); 
+    await supabase.from('boxes_web').insert([{ nombre: boxNombre.toUpperCase(), descripcion: boxDesc.toUpperCase(), precio: Number(boxPrecio), imagen_url: boxImg, stock: Number(boxStock || 10) }]); 
+    setBoxNombre(''); setBoxDesc(''); setBoxPrecio(''); setBoxImg(''); setBoxStock(10); await cargarDatos(); setLoading(false); alert('✅ Box creado.'); 
+  };
   const eliminarBoxWeb = async (id) => { if(!isOnline) return; if(window.confirm('¿Eliminar Box?')){ setLoading(true); await supabase.from('boxes_web').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
+  const editarPrecioBox = async (box) => { if(!isOnline) return; const n = prompt(`Nuevo precio para ${box.nombre ($)}:`, box.precio); if (n && !isNaN(n)) { await supabase.from('boxes_web').update({ precio: Number(n) }).eq('id', box.id); cargarDatos(); } };
+  const editarStockBox = async (box) => { if(!isOnline) return; const s = prompt(`Stock disponible para ${box.nombre}:`, box.stock ?? 10); if (s !== null && !isNaN(s)) { await supabase.from('boxes_web').update({ stock: Number(s) }).eq('id', box.id); cargarDatos(); } };
+  const editarDescBox = async (box) => { if(!isOnline) return; const d = prompt(`Editar bebidas incluidas en ${box.nombre}:`, box.descripcion); if (d && d.trim()) { await supabase.from('boxes_web').update({ descripcion: d.toUpperCase() }).eq('id', box.id); cargarDatos(); } };
+
+  const enviarQrWhatsAppCliente = (telefonoTexto, nombreCliente, codigoQr, tipoPase) => {
+    const numLimpio = (telefonoTexto || '').replace(/\D/g, '');
+    if (!numLimpio) return alert("⚠️ Este registro no tiene un número de teléfono guardado.");
+    const numFinal = numLimpio.startsWith('54') ? numLimpio : '549' + numLimpio;
+    const linkTienda = `${window.location.origin}/?tienda=true`;
+    const msg = encodeURIComponent(`¡Hola ${nombreCliente}! 🎉 Aquí tienes los datos de tu acceso oficial para *GJBROSS*:\n\n🔑 *Código QR:* ${codigoQr}\n🎫 *Pase:* ${tipoPase.toUpperCase()}\n\n📲 Puedes recuperar y descargar tu QR en cualquier momento ingresando tu DNI en nuestra Boletería Oficial:\n${linkTienda}`);
+    window.open(`https://wa.me/${numFinal}?text=${msg}`, '_blank');
+  };
 
   // ----- RENDERIZADO DE VISTAS -----
 
@@ -515,7 +638,7 @@ function App() {
           <button onClick={() => { setErrorPago(false); window.history.replaceState({}, document.title, "/?tienda=true"); }} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl uppercase mb-3 shadow-lg">
             🔄 Volver a Intentar
           </button>
-          <button onClick={() => { const msg = encodeURIComponent("Hola GJBROSS! Tuve un problema al intentar pagar en la boletería web."); window.open(`https://wa.me/?text=${msg}`, '_blank'); }} className="w-full bg-gray-700 hover:bg-gray-600 text-yellow-400 font-bold py-3 rounded-xl uppercase text-xs border border-gray-600">
+          <button onClick={() => { const msg = encodeURIComponent("Hola GJBROSS! Tuve un problema al intentar pagar en la boletería web."); window.open(`https://wa.me/${WHATSAPP_SOPORTE}?text=${msg}`, '_blank'); }} className="w-full bg-gray-700 hover:bg-gray-600 text-yellow-400 font-bold py-3 rounded-xl uppercase text-xs border border-gray-600">
             📲 Informar un Error / Soporte
           </button>
         </div>
@@ -563,7 +686,7 @@ function App() {
           </button>
 
           <div className="flex gap-2">
-            <button onClick={() => { const msg = encodeURIComponent(`Hola! Tengo una consulta sobre mi ticket GJBROSS. Titular: ${qrGenerado.nombre} - Código: ${qrGenerado.codigo}`); window.open(`https://wa.me/?text=${msg}`, '_blank'); }} className="flex-1 bg-gray-700 hover:bg-gray-600 text-yellow-400 py-3 rounded-xl font-bold uppercase text-xs transition">
+            <button onClick={() => { const msg = encodeURIComponent(`Hola! Tengo una consulta sobre mi ticket GJBROSS. Titular: ${qrGenerado.nombre} - Código: ${qrGenerado.codigo}`); window.open(`https://wa.me/${WHATSAPP_SOPORTE}?text=${msg}`, '_blank'); }} className="flex-1 bg-gray-700 hover:bg-gray-600 text-yellow-400 py-3 rounded-xl font-bold uppercase text-xs transition">
               ⚠️ Informar un Error
             </button>
             <button onClick={() => { setQrGenerado(null); setBoxSeleccionado(null); if (!user) window.history.replaceState({}, document.title, "/?tienda=true"); }} className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 py-3 rounded-xl font-bold uppercase text-xs transition">
@@ -634,17 +757,45 @@ function App() {
                 <>
                   <div className="bg-gradient-to-r from-red-900/40 to-black border border-red-800 p-6 rounded-3xl text-center shadow-2xl relative overflow-hidden"><div className="absolute top-0 left-0 w-full h-1 bg-red-600"></div><h3 className="text-2xl font-black text-white uppercase tracking-widest drop-shadow-md">TODOS LOS BOX INCLUYEN:</h3><div className="flex flex-wrap justify-center gap-4 mt-4 text-sm font-bold text-gray-300"><span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">🎟️ 10 PULSERAS DE ACCESO</span><span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">🛋️ SOFÁ EXCLUSIVO & MESA</span><span className="bg-black/50 px-4 py-2 rounded-lg border border-gray-700">👑 ZONA BOX GJBROSS</span></div></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                    {boxesWeb.map(box => (
-                      <div key={box.id} className="bg-gray-800 border-2 border-red-900/30 hover:border-red-500 rounded-3xl overflow-hidden shadow-2xl flex flex-col transition duration-300 hover:-translate-y-1">
-                        {box.imagen_url ? (<img src={box.imagen_url} alt={box.nombre} className="w-full h-56 object-cover border-b-4 border-black" />) : (<div className="w-full h-56 bg-gradient-to-b from-gray-900 to-black flex items-center justify-center border-b-4 border-black text-6xl shadow-inner">🛋️</div>)}
-                        <div className="p-6 flex-1 flex flex-col relative"><div className="absolute -top-6 right-4 bg-red-600 text-white font-black px-4 py-1 rounded-full text-lg shadow-lg border-2 border-black transform rotate-3">VIP</div><h3 className="text-2xl font-black text-white uppercase pr-10">{box.nombre}</h3><div className="mt-4 flex-1"><p className="text-sm font-bold text-gray-400 uppercase leading-relaxed whitespace-pre-line bg-black/30 p-4 rounded-xl border border-gray-700 shadow-inner">{box.descripcion}</p></div><div className="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center"><span className="text-3xl font-black text-red-500 drop-shadow-md">${box.precio}</span><button onClick={() => { setBoxSeleccionado(box); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-[0_0_15px_rgba(220,38,38,0.4)] transition active:scale-95 border border-red-400">Reservar Box</button></div></div>
-                      </div>
-                    ))}
+                    {boxesWeb.map(box => {
+                      const stockDisp = box.stock ?? 10;
+                      const agotado = stockDisp <= 0;
+                      return (
+                        <div key={box.id} className={`bg-gray-800 border-2 ${agotado ? 'border-gray-700 opacity-60' : 'border-red-900/30 hover:border-red-500'} rounded-3xl overflow-hidden shadow-2xl flex flex-col transition duration-300`}>
+                          {box.imagen_url ? (<img src={box.imagen_url} alt={box.nombre} className="w-full h-56 object-cover border-b-4 border-black" />) : (<div className="w-full h-56 bg-gradient-to-b from-gray-900 to-black flex items-center justify-center border-b-4 border-black text-6xl shadow-inner">🛋️</div>)}
+                          <div className="p-6 flex-1 flex flex-col relative">
+                            <div className={`absolute -top-6 right-4 ${agotado ? 'bg-gray-600' : 'bg-red-600'} text-white font-black px-4 py-1 rounded-full text-xs shadow-lg border-2 border-black`}>
+                              {agotado ? 'AGOTADO' : `QUEDAN ${stockDisp}`}
+                            </div>
+                            <h3 className="text-2xl font-black text-white uppercase pr-10">{box.nombre}</h3>
+                            <div className="mt-4 flex-1"><p className="text-sm font-bold text-gray-400 uppercase leading-relaxed whitespace-pre-line bg-black/30 p-4 rounded-xl border border-gray-700 shadow-inner">{box.descripcion}</p></div>
+                            <div className="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center">
+                              <span className="text-3xl font-black text-red-500 drop-shadow-md">${box.precio}</span>
+                              <button disabled={agotado} onClick={() => { setBoxSeleccionado(box); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className={`${agotado ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.4)] active:scale-95 border border-red-400'} px-6 py-3 rounded-xl font-black uppercase text-sm transition`}>
+                                {agotado ? 'Sin Cupo' : 'Reservar Box'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </>
               )}
             </div>
           )}
+
+          {/* RECUPERADOR DE QR POR DNI PARA CLIENTES */}
+          <div className="max-w-md mx-auto mt-4 mb-12 bg-gray-800/80 p-6 rounded-3xl border border-gray-700 text-center shadow-xl">
+            <h3 className="text-sm font-black text-purple-400 uppercase tracking-wider mb-1">🔍 ¿Ya compraste y cerraste la ventana?</h3>
+            <p className="text-xs text-gray-400 mb-4">Ingresa tu DNI para volver a ver y descargar tu código QR o Voucher Box</p>
+            <form onSubmit={recuperarQrPorDni} className="flex gap-2">
+              <input type="number" placeholder="Tu N° de DNI..." className="flex-1 bg-gray-900 border border-gray-700 px-4 py-3 rounded-xl text-white font-bold text-sm focus:outline-none focus:border-purple-500" value={dniBusquedaWeb} onChange={e => setDniBusquedaWeb(e.target.value)} required />
+              <button type="submit" disabled={buscandoQrWeb} className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-3 rounded-xl font-black uppercase text-xs shadow-lg transition active:scale-95">
+                {buscandoQrWeb ? '...' : 'Buscar QR'}
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     );
@@ -759,20 +910,31 @@ function App() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <form onSubmit={crearBoxWeb} className="lg:col-span-1 space-y-3">
                         <input type="text" placeholder="Nombre (Ej: BOX GJBROSS 1)" className="w-full bg-gray-700 p-3 rounded font-bold focus:outline-none" value={boxNombre} onChange={e=>setBoxNombre(e.target.value)} required />
-                        <input type="number" placeholder="Precio $" className="w-full bg-gray-700 p-3 rounded font-bold text-green-400 focus:outline-none" value={boxPrecio} onChange={e=>setBoxPrecio(e.target.value)} required />
+                        <div className="flex gap-2">
+                          <input type="number" placeholder="Precio $" className="w-2/3 bg-gray-700 p-3 rounded font-bold text-green-400 focus:outline-none" value={boxPrecio} onChange={e=>setBoxPrecio(e.target.value)} required />
+                          <input type="number" placeholder="Stock" className="w-1/3 bg-gray-700 p-3 rounded font-bold text-yellow-400 focus:outline-none" value={boxStock} onChange={e=>setBoxStock(e.target.value)} required />
+                        </div>
                         <textarea placeholder="Descripción de botellas (Ej: 2 SKYY, 4 SPRITE)" className="w-full bg-gray-700 p-3 rounded h-24 font-bold focus:outline-none" value={boxDesc} onChange={e=>setBoxDesc(e.target.value)} required />
                         <input type="text" placeholder="URL Imagen (Opcional)" className="w-full bg-gray-700 p-3 rounded text-xs focus:outline-none" value={boxImg} onChange={e=>setBoxImg(e.target.value)} />
                         <button type="submit" disabled={!isOnline || loading} className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-xl font-black uppercase shadow-lg disabled:opacity-50">Añadir Box a la Tienda</button>
                     </form>
-                    <div className="lg:col-span-2 bg-gray-900/50 rounded-xl p-4 border border-gray-700 max-h-[350px] overflow-y-auto custom-scrollbar">
+                    <div className="lg:col-span-2 bg-gray-900/50 rounded-xl p-4 border border-gray-700 max-h-[380px] overflow-y-auto custom-scrollbar">
                         {boxesWeb.length === 0 ? <p className="text-gray-500 text-center mt-10 font-bold uppercase">No hay Boxes en venta.</p> : 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {boxesWeb.map(b => (
-                                <div key={b.id} className="bg-gray-800 p-4 rounded-xl border border-red-900/50 flex flex-col relative group">
-                                    <button onClick={()=>eliminarBoxWeb(b.id)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 font-bold text-lg opacity-0 group-hover:opacity-100 transition">❌</button>
-                                    <p className="font-black text-white uppercase text-lg leading-tight w-5/6">{b.nombre}</p>
-                                    <p className="font-black text-green-400 text-xl my-1">${b.precio}</p>
-                                    <p className="text-[10px] text-gray-400 uppercase font-bold whitespace-pre-line bg-gray-900 p-2 rounded flex-1">{b.descripcion}</p>
+                                <div key={b.id} className="bg-gray-800 p-4 rounded-xl border border-red-900/50 flex flex-col relative">
+                                    <button onClick={()=>eliminarBoxWeb(b.id)} className="absolute top-2 right-2 text-gray-500 hover:text-red-500 font-bold text-sm">❌</button>
+                                    <p className="font-black text-white uppercase text-base leading-tight pr-6">{b.nombre}</p>
+                                    <div className="flex justify-between items-center my-1">
+                                      <span className="font-black text-green-400 text-lg">${b.precio}</span>
+                                      <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase ${(b.stock ?? 10) > 0 ? 'bg-gray-700 text-yellow-400' : 'bg-red-600 text-white'}`}>Stock: {b.stock ?? 10}</span>
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 uppercase font-bold whitespace-pre-line bg-gray-900 p-2 rounded flex-1 mb-2">{b.descripcion}</p>
+                                    <div className="flex gap-1">
+                                      <button type="button" onClick={() => editarPrecioBox(b)} className="flex-1 bg-gray-700 hover:bg-gray-600 py-1.5 rounded text-[10px] font-black uppercase">$ Precio</button>
+                                      <button type="button" onClick={() => editarStockBox(b)} className="flex-1 bg-blue-700 hover:bg-blue-600 py-1.5 rounded text-[10px] font-black uppercase">📦 Stock</button>
+                                      <button type="button" onClick={() => editarDescBox(b)} className="flex-1 bg-purple-700 hover:bg-purple-600 py-1.5 rounded text-[10px] font-black uppercase">✏️ Texto</button>
+                                    </div>
                                 </div>
                             ))}
                         </div>}
@@ -806,6 +968,9 @@ function App() {
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <span className="text-xs font-black text-yellow-500 bg-black px-2 py-1 rounded">{l.codigo}</span>
+                            {(l.creado_por || '').includes('Tel:') && (
+                              <button onClick={() => enviarQrWhatsAppCliente(l.creado_por.split('Tel:')[1], l.nombre.split('|')[0].trim(), l.codigo, l.tipo_pase || 'general')} className="bg-green-600 hover:bg-green-500 text-white text-xs px-2 py-1 rounded font-black" title="Enviar por WhatsApp">📲</button>
+                            )}
                             <button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-2 py-1 rounded font-black" title="Descargar QR">⬇️</button>
                           </div>
                         </div>
@@ -822,6 +987,8 @@ function App() {
                       {reservasBoxes.length === 0 ? <p className="text-gray-500 text-xs font-bold uppercase">Sin reservas de Boxes online.</p> : reservasBoxes.map(r => {
                         const matchQr = r.box_nombre.match(/\[QR:\s*([^\]]+)\]/);
                         const codQr = matchQr ? matchQr[1] : 'BOX-' + r.id;
+                        const partesCliente = r.nombre_cliente.split('|');
+                        const telCliente = partesCliente[2] ? partesCliente[2].replace('Tel:', '').trim() : '';
                         return (
                           <div key={r.id} className="bg-gray-800 p-3 rounded-xl border border-red-900/60 flex flex-col justify-between gap-2">
                             <div>
@@ -832,8 +999,11 @@ function App() {
                               <p className="text-xs font-black text-red-400 uppercase mt-1">{r.box_nombre}</p>
                               <p className="text-[10px] text-gray-300 uppercase mt-1">{r.descripcion}</p>
                             </div>
-                            <div className="flex gap-2 pt-2 border-t border-gray-700">
-                              <button onClick={() => descargarInvitacion({ nombre: r.nombre_cliente.split('|')[0].trim(), cantidad: 10, codigo: codQr, tipo_pase: 'box', box_desc: r.descripcion })} className="flex-1 bg-blue-600 hover:bg-blue-500 py-1.5 rounded text-[10px] font-black uppercase">⬇️ Descargar QR Box</button>
+                            <div className="flex gap-1 pt-2 border-t border-gray-700">
+                              <button onClick={() => descargarInvitacion({ nombre: partesCliente[0].trim(), cantidad: 10, codigo: codQr, tipo_pase: 'box', box_desc: r.descripcion })} className="flex-1 bg-blue-600 hover:bg-blue-500 py-1.5 rounded text-[10px] font-black uppercase">⬇️ QR</button>
+                              {telCliente && telCliente !== '-' && (
+                                <button onClick={() => enviarQrWhatsAppCliente(telCliente, partesCliente[0].trim(), codQr, 'BOX VIP')} className="bg-green-600 hover:bg-green-500 px-3 py-1.5 rounded text-[10px] font-black uppercase">📲 WA</button>
+                              )}
                               {r.estado === 'pendiente' && <button onClick={() => entregarBox(r.id)} className="flex-1 bg-red-600 hover:bg-red-500 py-1.5 rounded text-[10px] font-black uppercase">✅ Entregar</button>}
                             </div>
                           </div>
@@ -850,11 +1020,59 @@ function App() {
             </div>
           </>
         )}
+
+        {/* HISTORIAL DE CIERRES SIEMPRE VISIBLE EN ADMIN */}
+        <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl mt-6">
+          <h2 className="text-lg font-black uppercase text-purple-400 mb-4 flex items-center border-b border-gray-700 pb-2">📚 Historial de Cierres Z (Fiestas Anteriores)</h2>
+          <div className="max-h-[400px] overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+            {historial.length === 0 ? <p className="text-gray-500 text-center py-6 font-bold uppercase text-sm">No hay cierres registrados aún.</p> : historial.map(h => (
+              <div key={h.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 transition">
+                <div className="flex justify-between items-start cursor-pointer" onClick={() => setSesionExpandida(sesionExpandida === h.id ? null : h.id)}>
+                  <div>
+                    <h3 className="text-lg font-bold text-white uppercase">{h.nombre_fiesta}</h3>
+                    <p className="text-xs text-gray-400 mt-1">📅 {h.fecha_cierre ? new Date(h.fecha_cierre).toLocaleDateString() : '--'} • 👤 Cerró: {h.cerrada_por}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xl font-black text-green-400">${Number(h.recaudacion_efectivo || 0) + Number(h.recaudacion_transf || 0)}</p>
+                    <p className="text-[10px] text-gray-300 uppercase mt-1 bg-gray-800 px-2 py-1 rounded inline-block shadow">{sesionExpandida === h.id ? '🔼 Ocultar' : '🔽 Ver Detalles'}</p>
+                  </div>
+                </div>
+                {sesionExpandida === h.id && (
+                  <div className="mt-4 pt-4 border-t border-gray-600 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Finanzas del Turno</h4>
+                      <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
+                        <div className="flex justify-between"><span>Efectivo:</span><span className="font-bold text-blue-400">${h.recaudacion_efectivo}</span></div>
+                        <div className="flex justify-between"><span>Transferencias / MP:</span><span className="font-bold text-purple-400">${h.recaudacion_transf}</span></div>
+                        <hr className="border-gray-600 my-1" />
+                        <div className="flex justify-between"><span>Entradas Vendidas:</span><span className="font-bold text-green-400">{h.personas_vendidas || 0} pers.</span></div>
+                        <div className="flex justify-between"><span>Listas Gratis RRPP:</span><span className="font-bold text-yellow-400">{h.personas_lista || 0} pers.</span></div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">🔥 Top 5 Bebidas Vendidas</h4>
+                      <div className="space-y-1 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
+                        {h.ranking_ventas && Object.keys(h.ranking_ventas).length > 0 ? (
+                          Object.entries(h.ranking_ventas).sort(([,a], [,b]) => b - a).slice(0, 5).map(([nombre, cant]) => (
+                            <div key={nombre} className="flex justify-between border-b border-gray-700 pb-1">
+                              <span className="truncate pr-2 text-gray-300">{nombre}</span>
+                              <span className="font-black text-yellow-400">{cant}x</span>
+                            </div>
+                          ))
+                        ) : <span className="text-gray-500 text-xs">Sin ventas de barra.</span>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
 
-  if (vista === 'puerta' || user.rol === 'puerta') {
+    if (vista === 'puerta' || user.rol === 'puerta') {
     const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
