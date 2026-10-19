@@ -95,6 +95,120 @@ function App() {
     });
   };
 
+  // REGISTRO CENTRALIZADO E INFALIBLE DE COMPRAS WEB
+  const registrarCompraWebEnBD = async (pendiente, paymentId) => {
+    if (!pendiente || !pendiente.nombre) return null;
+    const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
+    const sId = sData && sData.length > 0 ? sData[0].id : null;
+    const fiestaNombre = sData && sData[0] ? sData[0].nombre_fiesta : 'FIESTA GJBROSS';
+
+    const tipo = pendiente.tipo || 'general';
+    const prefijo = tipo === 'vip' ? 'VIP-' : (tipo === 'box' ? 'BOX-' : 'GEN-');
+    const sufijo = paymentId ? String(paymentId).slice(-6) : Math.random().toString(36).substr(2, 5).toUpperCase();
+    const codigo = prefijo + sufijo;
+
+    // Verificar si este pago de MP ya fue registrado antes (por el cliente o por auto-sync)
+    const { data: existente } = await supabase.from('listas_vip').select('*').eq('codigo', codigo).limit(1);
+    if (existente && existente.length > 0) {
+      return {
+        nombre: pendiente.nombre,
+        dni: pendiente.dni || '',
+        tel: pendiente.tel || '',
+        cantidad: Number(pendiente.cantidad || 1),
+        codigo,
+        tipo_pase: tipo,
+        fiesta: fiestaNombre,
+        box_nombre: pendiente.box_nombre || '',
+        box_desc: pendiente.box_desc || ''
+      };
+    }
+
+    const hora = new Date().toLocaleTimeString();
+    const nombreCompleto = `${pendiente.nombre}${pendiente.dni ? ' | DNI: ' + pendiente.dni : ''}`;
+    const contactoWeb = `Web${pendiente.tel ? ' | Tel: ' + pendiente.tel : ''}${paymentId ? ' | MP#' + paymentId : ''}`;
+    const cantNum = Number(pendiente.cantidad || (tipo === 'box' ? 10 : 1));
+
+    await supabase.from('listas_vip').insert([{ 
+      sesion_id: sId, 
+      nombre: nombreCompleto + (tipo === 'box' ? ` (${pendiente.box_nombre || 'Box VIP'})` : ' (Online)'), 
+      cantidad: cantNum, 
+      ingresados: 0, 
+      codigo, 
+      tipo_pase: tipo, 
+      creado_por: contactoWeb, 
+      hora_creacion: hora 
+    }]);
+
+    const montoTotalWeb = Number(pendiente.precio_total || 0);
+    if (montoTotalWeb > 0) {
+      const etiquetaVenta = tipo === 'box' 
+        ? `Box VIP Web (${pendiente.box_nombre || 'Box'})` 
+        : `Entrada ${tipo === 'vip' ? 'VIP' : 'General'} Web`;
+      await supabase.from('puerta').insert([{
+        sesion_id: sId,
+        tipo: 'venta',
+        nombre: etiquetaVenta,
+        cantidad: cantNum,
+        precio_unitario: Math.round(montoTotalWeb / cantNum),
+        total: montoTotalWeb,
+        metodo_pago: 'transferencia',
+        hora
+      }]);
+    }
+    
+    if (tipo === 'box') {
+      await supabase.from('reservas_boxes').insert([{ 
+        sesion_id: sId, 
+        nombre_cliente: `${pendiente.nombre} | DNI: ${pendiente.dni || '-'} | Tel: ${pendiente.tel || '-'}`, 
+        box_nombre: `${pendiente.box_nombre || 'BOX VIP'} [QR: ${codigo}]`, 
+        descripcion: pendiente.box_desc || '10 PULSERAS + MESA BOX', 
+        estado: 'pendiente', 
+        fecha: hora 
+      }]);
+      if (pendiente.box_id) {
+        const { data: bxActual } = await supabase.from('boxes_web').select('stock').eq('id', pendiente.box_id).single();
+        if (bxActual && bxActual.stock > 0) {
+          await supabase.from('boxes_web').update({ stock: bxActual.stock - 1 }).eq('id', pendiente.box_id);
+        }
+      }
+    }
+
+    return { 
+      nombre: pendiente.nombre, 
+      dni: pendiente.dni || '', 
+      tel: pendiente.tel || '', 
+      cantidad: cantNum, 
+      codigo, 
+      tipo_pase: tipo, 
+      fiesta: fiestaNombre, 
+      box_nombre: pendiente.box_nombre || '',
+      box_desc: pendiente.box_desc || '' 
+    };
+  };
+
+  // AUTO-SINCRONIZADOR: Rescata compras de clientes que cerraron Mercado Pago antes de volver a la web
+  const sincronizarPagosWebMP = async () => {
+    if (!navigator.onLine) return;
+    try {
+      const res = await fetch('/api/mp-transferencias');
+      const pagos = await res.json();
+      if (!Array.isArray(pagos)) return;
+      let huboNuevos = false;
+      for (const p of pagos) {
+        if (p.metadata && p.metadata.nombre && p.metadata.tipo) {
+          const prefijo = p.metadata.tipo === 'vip' ? 'VIP-' : (p.metadata.tipo === 'box' ? 'BOX-' : 'GEN-');
+          const codigo = prefijo + String(p.id).slice(-6);
+          const { data: existe } = await supabase.from('listas_vip').select('id').eq('codigo', codigo).limit(1);
+          if (!existe || existe.length === 0) {
+            await registrarCompraWebEnBD(p.metadata, p.id);
+            huboNuevos = true;
+          }
+        }
+      }
+      if (huboNuevos && user) cargarDatos();
+    } catch (e) { console.log('Sync MP en segundo plano'); }
+  };
+
   useEffect(() => {
     const verificarPagoOnline = async () => {
       const params = new URLSearchParams(window.location.search);
@@ -102,106 +216,38 @@ function App() {
       const paymentId = params.get('payment_id') || params.get('collection_id');
 
       if (status === 'approved') {
-        const pendiente = JSON.parse(localStorage.getItem('compra_pendiente'));
-        if (pendiente) {
-          // Evitar duplicados si recarga la página
-          const procesados = JSON.parse(localStorage.getItem('pagos_procesados') || '[]');
-          if (paymentId && procesados.includes(paymentId)) {
-            localStorage.removeItem('compra_pendiente');
-            return;
-          }
+        setLoading(true);
+        let pendiente = null;
+        try { pendiente = JSON.parse(localStorage.getItem('compra_pendiente')); } catch (e) {}
 
-          setLoading(true);
-
-          // Validación Anti-Trampa contra el Búnker de MP
-          if (paymentId) {
-            try {
-              const verif = await fetch(`/api/mp-transferencias?payment_id=${paymentId}`);
-              const verifData = await verif.json();
-              if (verifData && verifData.valido === false) {
-                setLoading(false);
-                setErrorPago(true);
-                return;
-              }
-            } catch (e) { console.log('Verificación local'); }
-          }
-
-          const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
-          const sId = sData && sData.length > 0 ? sData[0].id : null;
-          const prefijo = pendiente.tipo === 'vip' ? 'VIP-' : (pendiente.tipo === 'box' ? 'BOX-' : 'GEN-'); 
-          const codigo = prefijo + Math.random().toString(36).substr(2, 5).toUpperCase();
-          const hora = new Date().toLocaleTimeString();
-          
-          const nombreCompleto = `${pendiente.nombre}${pendiente.dni ? ' | DNI: ' + pendiente.dni : ''}`;
-          const contactoWeb = pendiente.tel ? `Web | Tel: ${pendiente.tel}` : 'Tienda Online';
-
-          await supabase.from('listas_vip').insert([{ 
-            sesion_id: sId, 
-            nombre: nombreCompleto + (pendiente.tipo === 'box' ? ` (${pendiente.box_nombre})` : ' (Online)'), 
-            cantidad: pendiente.cantidad, 
-            ingresados: 0, 
-            codigo, 
-            tipo_pase: pendiente.tipo, 
-            creado_por: contactoWeb, 
-            hora_creacion: hora 
-          }]);
-
-          // IMPACTO CONTABLE EN CAJA DIGITAL (BANCO / MP) Y TAQUILLA
-          const montoTotalWeb = Number(pendiente.precio_total || 0);
-          if (sId && montoTotalWeb > 0) {
-            const etiquetaVenta = pendiente.tipo === 'box' 
-              ? `Box VIP Web (${pendiente.box_nombre})` 
-              : `Entrada ${pendiente.tipo === 'vip' ? 'VIP' : 'General'} Web`;
-            await supabase.from('puerta').insert([{
-              sesion_id: sId,
-              tipo: 'venta',
-              nombre: etiquetaVenta,
-              cantidad: Number(pendiente.cantidad),
-              precio_unitario: Math.round(montoTotalWeb / Number(pendiente.cantidad)),
-              total: montoTotalWeb,
-              metodo_pago: 'transferencia',
-              hora
-            }]);
-          }
-          
-          // SI ES BOX: Guardar en Entregas Web y descontar 1 del Stock
-          if (pendiente.tipo === 'box') {
-            await supabase.from('reservas_boxes').insert([{ 
-              sesion_id: sId, 
-              nombre_cliente: `${pendiente.nombre} | DNI: ${pendiente.dni || '-'} | Tel: ${pendiente.tel || '-'}`, 
-              box_nombre: `${pendiente.box_nombre} [QR: ${codigo}]`, 
-              descripcion: pendiente.box_desc, 
-              estado: 'pendiente', 
-              fecha: hora 
-            }]);
-            if (pendiente.box_id) {
-              const { data: bxActual } = await supabase.from('boxes_web').select('stock').eq('id', pendiente.box_id).single();
-              if (bxActual && bxActual.stock > 0) {
-                await supabase.from('boxes_web').update({ stock: bxActual.stock - 1 }).eq('id', pendiente.box_id);
-              }
-            }
-          }
-
-          if (paymentId) {
-            procesados.push(paymentId);
-            localStorage.setItem('pagos_procesados', JSON.stringify(procesados));
-          }
-
-          setQrGenerado({ 
-            nombre: pendiente.nombre, 
-            dni: pendiente.dni || '', 
-            tel: pendiente.tel || '', 
-            cantidad: pendiente.cantidad, 
-            codigo, 
-            tipo_pase: pendiente.tipo, 
-            fiesta: sData && sData[0] ? sData[0].nombre_fiesta : 'FIESTA GJBROSS', 
-            box_nombre: pendiente.box_nombre || '',
-            box_desc: pendiente.box_desc || '' 
-          });
-          localStorage.removeItem('compra_pendiente');
-          window.history.replaceState({}, document.title, "/?tienda=true&ticket=" + codigo);
-          setLoading(false);
+        // Si cambió de navegador (ej: de Instagram a Chrome), recuperamos los datos de la URL
+        if (!pendiente && params.get('datos')) {
+          try { pendiente = JSON.parse(decodeURIComponent(params.get('datos'))); } catch (e) {}
         }
+
+        // Validamos con MP y si aún faltan datos los recuperamos de la metadata de MP
+        if (paymentId) {
+          try {
+            const verif = await fetch(`/api/mp-transferencias?payment_id=${paymentId}`);
+            const verifData = await verif.json();
+            if (verifData && verifData.valido === false) {
+              setLoading(false);
+              setErrorPago(true);
+              return;
+            }
+            if (!pendiente && verifData && verifData.metadata && verifData.metadata.nombre) {
+              pendiente = verifData.metadata;
+            }
+          } catch (e) { console.log('Verificación local'); }
+        }
+
+        if (pendiente) {
+          const qrData = await registrarCompraWebEnBD(pendiente, paymentId);
+          if (qrData) setQrGenerado(qrData);
+          localStorage.removeItem('compra_pendiente');
+          window.history.replaceState({}, document.title, "/?tienda=true&ticket=" + (qrData?.codigo || 'ok'));
+        }
+        setLoading(false);
       } else if (status === 'rejected' || params.get('pago') === 'fallo') {
         setErrorPago(true);
         window.history.replaceState({}, document.title, "/?tienda=true&pago=error");
@@ -243,6 +289,10 @@ function App() {
     
     if (sesion) {
       setSesionActiva(sesion); setPrecioG(sesion.precio_general || 5000); setPrecioV(sesion.precio_vip || 10000);
+      // Si había compras web hechas mientras la caja estaba cerrada, las vinculamos a esta fiesta activa
+      await supabase.from('listas_vip').update({ sesion_id: sesion.id }).is('sesion_id', null);
+      await supabase.from('reservas_boxes').update({ sesion_id: sesion.id }).is('sesion_id', null);
+      await supabase.from('puerta').update({ sesion_id: sesion.id }).is('sesion_id', null);
       const { data: v } = await supabase.from('ventas').select('*').eq('sesion_id', sesion.id); setVentasSesion(v || []);
       const { data: m } = await supabase.from('movimientos').select('*').eq('sesion_id', sesion.id); setMovsSesion(m || []);
       const { data: p } = await supabase.from('puerta').select('*').eq('sesion_id', sesion.id); setPuertaSesion(p || []);
@@ -294,13 +344,47 @@ function App() {
     const interval = setInterval(syncOfflineData, 10000); return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (user && isOnline) sincronizarPagosWebMP();
+  }, [user]);
+
   const cargarTransferenciasMP = async () => {
     if (!isOnline) return alert("Sin internet."); setCargandoMP(true);
-    try { const res = await fetch('/api/mp-transferencias'); const data = await res.json(); if (Array.isArray(data)) setTransfMP(data); } catch (error) { alert("Error de red."); }
+    try { 
+      await sincronizarPagosWebMP();
+      const res = await fetch('/api/mp-transferencias'); 
+      const data = await res.json(); 
+      if (Array.isArray(data)) setTransfMP(data); 
+    } catch (error) { alert("Error de red."); }
     setCargandoMP(false);
   };
 
-  const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
+  const rescatarPagoManualMP = async (pago) => {
+    const nombre = prompt(`Crear QR para el pago #${pago.id} ($${pago.monto}).\nIngresa Nombre y Apellido del cliente:`);
+    if (!nombre || !nombre.trim()) return;
+    const dni = prompt("Ingresa el DNI (opcional):") || "";
+    const esVip = (pago.descripcion || '').toUpperCase().includes('VIP');
+    const esBox = (pago.descripcion || '').toUpperCase().includes('BOX') || (pago.descripcion || '').toUpperCase().includes('RESERVA');
+    const tipo = esBox ? 'box' : (esVip ? 'vip' : 'general');
+    const cant = Number(prompt("¿Para cuántas personas es el acceso?", esBox ? "10" : "1")) || 1;
+    setLoading(true);
+    const qr = await registrarCompraWebEnBD({
+      nombre: nombre.trim(),
+      dni: dni.trim(),
+      tel: '',
+      tipo,
+      cantidad: cant,
+      precio_total: pago.monto,
+      box_nombre: esBox ? pago.descripcion : '',
+      box_desc: esBox ? 'BOX VIP RESERVADO POR MP' : ''
+    }, pago.id);
+    await cargarDatos();
+    setLoading(false);
+    setModalMP(false);
+    if (qr) alert(`✅ ¡QR Creado con éxito!\nCódigo: ${qr.codigo}\nYa figura en la lista de QRs y en la Caja.`);
+  };
+
+    const capitalEnBarra = bebidas.reduce((acc, b) => acc + (b.precio * b.stock), 0);
   const deudaProveedores = proveedores.reduce((acc, p) => acc + ((p.compras || []).reduce((s, c) => s + ((c.cantidad||1) * c.costo), 0) - (p.descuento || 0)), 0);
   const totalEfecVentas = ventasSesion.filter(v => v.metodo_pago === 'efectivo').reduce((a, c) => a + Number(c.total), 0);
   const totalTransfVentas = ventasSesion.filter(v => v.metodo_pago === 'transferencia').reduce((a, c) => a + Number(c.total), 0);
@@ -335,15 +419,16 @@ function App() {
     setLoading(true);
     const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
     const totalPagar = precio * cantWeb;
-    localStorage.setItem('compra_pendiente', JSON.stringify({ 
+    const datosCompra = { 
       nombre: nombreWeb.trim(), 
       dni: dniWeb.trim(), 
       tel: telWeb.trim(), 
       tipo: tipoWeb, 
       cantidad: cantWeb,
       precio_total: totalPagar
-    }));
-    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()} GJBROSS`, totalPagar, cantWeb, tipoWeb);
+    };
+    localStorage.setItem('compra_pendiente', JSON.stringify(datosCompra));
+    ejecutarPagoMP(`Entrada ${tipoWeb.toUpperCase()} GJBROSS`, totalPagar, cantWeb, tipoWeb, datosCompra);
   };
 
   const handleComprarBox = async (e) => {
@@ -352,7 +437,7 @@ function App() {
     if ((boxSeleccionado.stock ?? 10) <= 0) return alert("⚠️ Este Box ya se encuentra agotado.");
     if (!nombreWeb.trim() || !dniWeb.trim() || !telWeb.trim()) return alert("Por favor completa Nombre, DNI y WhatsApp");
     setLoading(true);
-    localStorage.setItem('compra_pendiente', JSON.stringify({ 
+    const datosCompra = { 
       nombre: nombreWeb.trim(), 
       dni: dniWeb.trim(), 
       tel: telWeb.trim(), 
@@ -362,22 +447,21 @@ function App() {
       box_nombre: boxSeleccionado.nombre, 
       box_desc: boxSeleccionado.descripcion,
       precio_total: boxSeleccionado.precio
-    }));
-    ejecutarPagoMP(`Reserva ${boxSeleccionado.nombre}`, boxSeleccionado.precio, 1, 'box');
+    };
+    localStorage.setItem('compra_pendiente', JSON.stringify(datosCompra));
+    ejecutarPagoMP(`Reserva ${boxSeleccionado.nombre}`, boxSeleccionado.precio, 1, 'box', datosCompra);
   };
 
   const recuperarQrPorDni = async (e) => {
     e.preventDefault();
     if (!dniBusquedaWeb.trim()) return;
     setBuscandoQrWeb(true);
-    const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
-    const sId = sData && sData[0] ? sData[0].id : null;
-    let query = supabase.from('listas_vip').select('*').ilike('nombre', `%${dniBusquedaWeb.trim()}%`).order('id', { ascending: false }).limit(1);
-    if (sId) query = query.eq('sesion_id', sId);
-    const { data: encontrados } = await query;
+    // Primero sincronizamos con Mercado Pago por si el cliente cerró la app sin volver
+    await sincronizarPagosWebMP();
+    const { data: encontrados } = await supabase.from('listas_vip').select('*').ilike('nombre', `%${dniBusquedaWeb.trim()}%`).order('id', { ascending: false }).limit(1);
     if (!encontrados || encontrados.length === 0) {
       setBuscandoQrWeb(false);
-      return alert("❌ No encontramos ningún acceso activo con ese DNI.");
+      return alert("❌ No encontramos ningún acceso con ese DNI. Si acabas de pagar, aguarda unos segundos y vuelve a intentar.");
     }
     const item = encontrados[0];
     let descBox = '';
@@ -389,25 +473,29 @@ function App() {
     setQrGenerado({
       nombre: item.nombre.split('|')[0].trim(),
       dni: dniBusquedaWeb.trim(),
-      tel: (item.creado_por || '').includes('Tel:') ? item.creado_por.split('Tel:')[1].trim() : '',
+      tel: (item.creado_por || '').includes('Tel:') ? item.creado_por.split('Tel:')[1].split('|')[0].trim() : '',
       cantidad: item.cantidad,
       codigo: item.codigo,
       tipo_pase: item.tipo_pase,
-      fiesta: sData && sData[0] ? sData[0].nombre_fiesta : 'FIESTA GJBROSS',
+      fiesta: sesionActiva?.nombre_fiesta || 'FIESTA GJBROSS',
       box_nombre: item.tipo_pase === 'box' ? 'BOX VIP' : '',
       box_desc: descBox
     });
   };
 
-    const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase) => {
+  const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase, datosCompra) => {
     try {
-      const resp = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ titulo, precio: precioTotal/cant, cantidad: cant, tipoPase, origin: window.location.origin + '/?tienda=true' }) });
+      const resp = await fetch('/api/checkout', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ titulo, precio: precioTotal/cant, cantidad: cant, tipoPase, origin: window.location.origin + '/?tienda=true', datosCompra }) 
+      });
       const data = await resp.json();
       if (data.url_pago) window.location.href = data.url_pago; else { alert("Error al conectar con MP."); setLoading(false); }
     } catch(e) { alert("Error de red"); setLoading(false); }
   };
 
-  const descargarInvitacion = (qrData) => { 
+    const descargarInvitacion = (qrData) => { 
     const canvas = document.createElement('canvas'); canvas.width = 1080; canvas.height = 1920; const ctx = canvas.getContext('2d'); 
     const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
     ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
@@ -460,11 +548,11 @@ function App() {
     const renderModalValidacionMP = () => {
     if (!modalMP) return null;
     return (
-      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Buscando...' : '🔄 Actualizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center"><div className="flex-1 pr-2"><p className="font-bold text-white text-sm line-clamp-1">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} {t.email && `• ${t.email}`}</p></div><span className="font-black text-green-400 text-xl">+${t.monto}</span></div>))}</div></div></div>
+      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Sincronizando...' : '🔄 Actualizar y Sincronizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center gap-2"><div className="flex-1 pr-2 min-w-0"><p className="font-bold text-white text-sm truncate">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} • Op #{String(t.id).slice(-6)}</p>{t.metadata?.nombre && <p className="text-[10px] text-purple-400 font-bold uppercase mt-0.5">👤 {t.metadata.nombre} (DNI: {t.metadata.dni})</p>}</div><div className="text-right shrink-0"><span className="font-black text-green-400 text-lg block">+$${t.monto}</span>{(user?.rol === 'admin' && (t.descripcion || '').toLowerCase().includes('entrada') || (t.descripcion || '').toLowerCase().includes('reserva')) && (<button onClick={() => rescatarPagoManualMP(t)} className="mt-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black uppercase px-2 py-1 rounded shadow">+ Crear QR</button>)}</div></div>))}</div></div></div>
     );
   };
 
-  const entregarBox = async (id) => {
+    const entregarBox = async (id) => {
     if(!isOnline) return;
     if(!window.confirm('¿Confirmar entrega de las botellas de este BOX?')) return;
     setLoading(true); await supabase.from('reservas_boxes').update({ estado: 'entregado' }).eq('id', id); await cargarDatos(); setLoading(false);

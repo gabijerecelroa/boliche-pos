@@ -4,11 +4,17 @@ export default async function handler(req, res) {
   const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
   const preference = new Preference(client);
   try {
-    const { titulo, precio, cantidad, tipoPase, origin } = req.body;
+    const { titulo, precio, cantidad, tipoPase, origin, datosCompra } = req.body;
+    const datosEncoded = datosCompra ? `&datos=${encodeURIComponent(JSON.stringify(datosCompra))}` : '';
     const response = await preference.create({
       body: {
         items: [{ id: tipoPase === 'box' ? 'box_vip' : 'entrada_web', title: titulo, quantity: Number(cantidad), unit_price: Number(precio), currency_id: 'ARS' }],
-        back_urls: { success: `${origin}`, failure: `${origin}`, pending: `${origin}` },
+        metadata: datosCompra || {},
+        back_urls: { 
+          success: `${origin}${datosEncoded}`, 
+          failure: `${origin}`, 
+          pending: `${origin}` 
+        },
         auto_return: "approved"
       }
     });

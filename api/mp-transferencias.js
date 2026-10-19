@@ -4,21 +4,21 @@ export default async function handler(req, res) {
   const { payment_id } = req.query;
 
   try {
-    // MODO 1: Verificación Anti-Trampa de un pago específico de la Tienda Web
     if (payment_id) {
       const respPago = await fetch(`https://api.mercadopago.com/v1/payments/${payment_id}`, {
         headers: { 'Authorization': `Bearer ${process.env.MP_ACCESS_TOKEN}` }
       });
       const dataPago = await respPago.json();
       return res.status(200).json({
+        id: dataPago.id,
         valido: dataPago.status === 'approved',
         status: dataPago.status,
-        monto: dataPago.transaction_amount
+        monto: dataPago.transaction_amount,
+        metadata: dataPago.metadata || {}
       });
     }
 
-    // MODO 2: Lista de últimas 15 transferencias para la barra
-    const response = await fetch('https://api.mercadopago.com/v1/payments/search?sort=date_created&criteria=desc&status=approved&limit=15', {
+    const response = await fetch('https://api.mercadopago.com/v1/payments/search?sort=date_created&criteria=desc&status=approved&limit=30', {
       headers: { 'Authorization': `Bearer ${process.env.MP_ACCESS_TOKEN}` }
     });
     
@@ -35,7 +35,8 @@ export default async function handler(req, res) {
           monto: p.transaction_amount,
           descripcion: descripcionLimpia,
           fecha: new Date(p.date_created).toLocaleString('es-AR'),
-          email: ''
+          email: '',
+          metadata: p.metadata || {}
         };
       });
       res.status(200).json(transacciones);
