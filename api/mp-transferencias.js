@@ -1,3 +1,13 @@
+function decodificarRef(extRef, meta) {
+  if (extRef) {
+    try {
+      const jsonStr = Buffer.from(extRef, 'base64').toString('utf8');
+      return JSON.parse(jsonStr);
+    } catch (e) {}
+  }
+  return meta || {};
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Método no permitido' });
 
@@ -14,7 +24,7 @@ export default async function handler(req, res) {
         valido: dataPago.status === 'approved',
         status: dataPago.status,
         monto: dataPago.transaction_amount,
-        metadata: dataPago.metadata || {}
+        metadata: decodificarRef(dataPago.external_reference, dataPago.metadata)
       });
     }
 
@@ -36,7 +46,7 @@ export default async function handler(req, res) {
           descripcion: descripcionLimpia,
           fecha: new Date(p.date_created).toLocaleString('es-AR'),
           email: '',
-          metadata: p.metadata || {}
+          metadata: decodificarRef(p.external_reference, p.metadata)
         };
       });
       res.status(200).json(transacciones);

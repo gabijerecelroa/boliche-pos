@@ -221,8 +221,8 @@ function App() {
         try { pendiente = JSON.parse(localStorage.getItem('compra_pendiente')); } catch (e) {}
 
         // Si cambió de navegador (ej: de Instagram a Chrome), recuperamos los datos de la URL
-        if (!pendiente && params.get('datos')) {
-          try { pendiente = JSON.parse(decodeURIComponent(params.get('datos'))); } catch (e) {}
+        if (!pendiente && params.get('external_reference')) {
+          try { pendiente = JSON.parse(atob(params.get('external_reference'))); } catch (e) {}
         }
 
         // Validamos con MP y si aún faltan datos los recuperamos de la metadata de MP
@@ -655,7 +655,7 @@ function App() {
     setBoxNombre(''); setBoxDesc(''); setBoxPrecio(''); setBoxImg(''); setBoxStock(10); await cargarDatos(); setLoading(false); alert('✅ Box creado.'); 
   };
   const eliminarBoxWeb = async (id) => { if(!isOnline) return; if(window.confirm('¿Eliminar Box?')){ setLoading(true); await supabase.from('boxes_web').delete().eq('id', id); await cargarDatos(); setLoading(false); } };
-  const editarPrecioBox = async (box) => { if(!isOnline) return; const n = prompt(`Nuevo precio para ${box.nombre ($)}:`, box.precio); if (n && !isNaN(n)) { await supabase.from('boxes_web').update({ precio: Number(n) }).eq('id', box.id); cargarDatos(); } };
+  const editarPrecioBox = async (box) => { if(!isOnline) return; const n = prompt(`Nuevo precio para ${box.nombre}:`, box.precio); if (n && !isNaN(n)) { await supabase.from('boxes_web').update({ precio: Number(n) }).eq('id', box.id); cargarDatos(); } };
   const editarStockBox = async (box) => { if(!isOnline) return; const s = prompt(`Stock disponible para ${box.nombre}:`, box.stock ?? 10); if (s !== null && !isNaN(s)) { await supabase.from('boxes_web').update({ stock: Number(s) }).eq('id', box.id); cargarDatos(); } };
   const editarDescBox = async (box) => { if(!isOnline) return; const d = prompt(`Editar bebidas incluidas en ${box.nombre}:`, box.descripcion); if (d && d.trim()) { await supabase.from('boxes_web').update({ descripcion: d.toUpperCase() }).eq('id', box.id); cargarDatos(); } };
 

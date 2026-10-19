@@ -5,19 +5,31 @@ export default async function handler(req, res) {
   const preference = new Preference(client);
   try {
     const { titulo, precio, cantidad, tipoPase, origin, datosCompra } = req.body;
-    const datosEncoded = datosCompra ? `&datos=${encodeURIComponent(JSON.stringify(datosCompra))}` : '';
+    const cleanOrigin = origin && origin.includes('?') ? origin : `${origin}/?tienda=true`;
+    // Encriptamos los datos en Base64 dentro de external_reference (100% compatible con MP)
+    const extRef = datosCompra ? Buffer.from(JSON.stringify(datosCompra)).toString('base64') : '';
+
     const response = await preference.create({
       body: {
-        items: [{ id: tipoPase === 'box' ? 'box_vip' : 'entrada_web', title: titulo, quantity: Number(cantidad), unit_price: Number(precio), currency_id: 'ARS' }],
-        metadata: datosCompra || {},
+        items: [{ 
+          id: tipoPase === 'box' ? 'box_vip' : 'entrada_web', 
+          title: titulo, 
+          quantity: Number(cantidad), 
+          unit_price: Number(precio), 
+          currency_id: 'ARS' 
+        }],
+        external_reference: extRef,
         back_urls: { 
-          success: `${origin}${datosEncoded}`, 
-          failure: `${origin}`, 
-          pending: `${origin}` 
+          success: cleanOrigin, 
+          failure: cleanOrigin, 
+          pending: cleanOrigin 
         },
         auto_return: "approved"
       }
     });
     res.status(200).json({ url_pago: response.init_point });
-  } catch (error) { res.status(500).json({ error: 'Fallo al conectar con MP' }); }
+  } catch (error) { 
+    console.error("Error Checkout MP:", error);
+    res.status(500).json({ error: 'Fallo al conectar con MP' }); 
+  }
 }
