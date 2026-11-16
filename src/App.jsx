@@ -21,6 +21,7 @@ function App() {
   const [listasVip, setListasVip] = useState([]);
   const [staff, setStaff] = useState([]);
   const [boxesWeb, setBoxesWeb] = useState([]);
+  const [plantillaQrUrl, setPlantillaQrUrl] = useState('');
   const [reservasBoxes, setReservasBoxes] = useState([]);
 
   const [carrito, setCarrito] = useState([]);
@@ -88,14 +89,51 @@ function App() {
   const [errorPago, setErrorPago] = useState(false);
 
   const ordenarBoxes = (arr) => {
-    return [...arr].sort((a, b) => {
-      const numA = parseInt((a.nombre.match(/\d+/) || [0])[0]);
-      const numB = parseInt((b.nombre.match(/\d+/) || [0])[0]);
-      return numA - numB;
-    });
+    const configRow = (arr || []).find(b => b.nombre === '__FONDO_QR__');
+    if (configRow && configRow.imagen_url) {
+      setPlantillaQrUrl(configRow.imagen_url);
+    }
+    return [...(arr || [])]
+      .filter(b => b.nombre !== '__FONDO_QR__')
+      .sort((a, b) => {
+        const numA = parseInt((a.nombre.match(/\d+/) || [0])[0]);
+        const numB = parseInt((b.nombre.match(/\d+/) || [0])[0]);
+        return numA - numB;
+      });
   };
 
-  // REGISTRO CENTRALIZADO E INFALIBLE DE COMPRAS WEB
+  const subirPlantillaQr = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setLoading(true);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = async () => {
+        const c = document.createElement('canvas');
+        c.width = 1080;
+        c.height = 1920;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 1080, 1920);
+        const dataUrl = c.toDataURL('image/jpeg', 0.88);
+        await supabase.from('boxes_web').delete().eq('nombre', '__FONDO_QR__');
+        await supabase.from('boxes_web').insert([{
+          nombre: '__FONDO_QR__',
+          descripcion: 'PLANTILLA_QR',
+          precio: 0,
+          imagen_url: dataUrl,
+          stock: 0
+        }]);
+        setPlantillaQrUrl(dataUrl);
+        setLoading(false);
+        alert('✅ ¡Diseño de plantilla QR actualizado en todo el sistema!');
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+    // REGISTRO CENTRALIZADO E INFALIBLE DE COMPRAS WEB
   const registrarCompraWebEnBD = async (pendiente, paymentId) => {
     if (!pendiente || !pendiente.nombre) return null;
     const { data: sData } = await supabase.from('sesiones').select('id, nombre_fiesta').eq('estado', 'abierta').order('id', { ascending: false }).limit(1);
@@ -496,41 +534,22 @@ function App() {
   };
 
     const descargarInvitacion = (qrData) => { 
-    const canvas = document.createElement('canvas'); canvas.width = 1080; canvas.height = 1920; const ctx = canvas.getContext('2d'); 
-    const grad = ctx.createLinearGradient(0, 0, 1080, 1920); grad.addColorStop(0, '#0f0c29'); grad.addColorStop(0.5, '#302b63'); grad.addColorStop(1, '#24243e'); ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height); 
-    ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 15; ctx.strokeRect(50, 50, 980, 1820); 
-    ctx.fillStyle = '#10b981'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; 
-    ctx.fillText(`FIESTA: ${(qrData.fiesta || sesionActiva?.nombre_fiesta || '').toUpperCase()}`, 540, 150, 900); 
-    ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 80px sans-serif'; ctx.fillText('GJBROSS', 540, 250); 
-    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 120px sans-serif'; 
-    ctx.fillText(qrData.tipo_pase === 'box' ? 'RESERVA BOX' : (qrData.tipo_pase === 'vip' ? 'PASE VIP' : 'ACCESO QR'), 540, 420); 
-    ctx.fillStyle = '#fbbf24'; ctx.font = '55px sans-serif'; ctx.fillText(qrData.nombre.toUpperCase(), 540, 580, 900); if (qrData.dni) { ctx.fillStyle = '#d8b4fe'; ctx.font = 'bold 36px sans-serif'; ctx.fillText('DNI: ' + qrData.dni, 540, 630); } 
-    
-    if (qrData.tipo_pase === 'box') {
-        ctx.fillStyle = '#10b981'; ctx.font = 'bold 35px sans-serif'; ctx.fillText('✅ PRESENTAR ESTE TICKET EN LA BARRA', 540, 680); 
-        ctx.fillStyle = '#ffffff'; ctx.font = '30px sans-serif'; ctx.fillText(qrData.box_desc, 540, 740); 
-    } else {
-        ctx.fillStyle = '#9ca3af'; ctx.font = '40px sans-serif'; ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 680); 
-    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1920;
+    const ctx = canvas.getContext('2d');
 
-    const img = new Image(); img.crossOrigin = 'Anonymous'; 
-    img.onload = () => { 
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(270, 800, 540, 540); ctx.drawImage(img, 290, 820, 500, 500); 
-        ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 60px sans-serif'; ctx.fillText(qrData.codigo, 540, 1500); 
-        ctx.fillStyle = '#9ca3af'; ctx.font = '35px sans-serif'; ctx.fillText('Presenta este código en la puerta', 540, 1750); 
-        canvas.toBlob(async (blob) => {
-        const fileName = `Ticket_${qrData.tipo_pase||'vip'}_${qrData.nombre.replace(/\s+/g, '_')}.png`;
-        
-        // MAGIA PARA iPHONE/ANDROID: Abre el menú nativo para compartir/guardar
+    const exportarCanvas = () => {
+      canvas.toBlob(async (blob) => {
+        const nombreArchivo = (qrData.nombre || 'Invitado').split('|')[0].trim().replace(/\s+/g, '_');
+        const fileName = `Ticket_${qrData.tipo_pase || 'vip'}_${nombreArchivo}.png`;
         if (navigator.canShare && navigator.userAgent.match(/iPhone|iPad|iPod|Android/i)) {
-            const file = new File([blob], fileName, { type: 'image/png' });
-            try {
-                await navigator.share({ files: [file], title: 'Ticket GJBROSS' });
-                return;
-            } catch (e) { console.log('Acción cancelada'); }
+          const file = new File([blob], fileName, { type: 'image/png' });
+          try {
+            await navigator.share({ files: [file], title: 'Acceso QR' });
+            return;
+          } catch (e) { console.log('Acción cancelada'); }
         }
-        
-        // Método clásico reforzado para Computadoras
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -539,11 +558,73 @@ function App() {
         link.click();
         document.body.removeChild(link);
         window.URL.revokeObjectURL(url);
-    }, 'image/png'); 
-    }; img.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`; 
+      }, 'image/png');
+    };
+
+    const dibujarTextosYQr = () => {
+      // Limpiamos el nombre para que no salga "| DNI: ..." ni "(Online)" en la imagen
+      const nombreLimpio = (qrData.nombre || '')
+        .split('|')[0]
+        .replace(/\(Online\)/gi, '')
+        .replace(/\(Mesa Box\)/gi, '')
+        .replace(/\(Web\)/gi, '')
+        .trim()
+        .toUpperCase();
+
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+      ctx.shadowBlur = 12;
+
+      // ARRIBA DEL RECUADRO: Nombre del titular y cantidad de personas
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = 'bold 64px sans-serif';
+      ctx.fillText(nombreLimpio, 540, 860, 920);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '44px sans-serif';
+      ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 940);
+      ctx.restore();
+
+      // ADENTRO DEL RECUADRO (x: 211..883, y: 1020..1620): Centramos el QR
+      const imgQr = new Image();
+      imgQr.crossOrigin = 'Anonymous';
+      imgQr.onload = () => {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(277, 1050, 540, 540);
+        ctx.drawImage(imgQr, 297, 1070, 500, 500);
+        exportarCanvas();
+      };
+      imgQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${qrData.codigo}&color=000000&bgcolor=FFFFFF`;
+    };
+
+    if (plantillaQrUrl) {
+      const bg = new Image();
+      bg.crossOrigin = 'Anonymous';
+      bg.onload = () => {
+        ctx.drawImage(bg, 0, 0, 1080, 1920);
+        dibujarTextosYQr();
+      };
+      bg.onerror = () => {
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, 1080, 1920);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(211, 1020, 672, 600);
+        dibujarTextosYQr();
+      };
+      bg.src = plantillaQrUrl;
+    } else {
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(0, 0, 1080, 1920);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(211, 1020, 672, 600);
+      dibujarTextosYQr();
+    }
   };
 
-  const modalQRComponent = null;
+    const modalQRComponent = null;
 
     const renderModalValidacionMP = () => {
     if (!modalMP) return null;
@@ -1045,6 +1126,10 @@ function App() {
                   <div>
                     <h2 className="text-lg font-black uppercase text-yellow-500 mb-3 flex items-center justify-between">
                       <span>🎟 QRs Emitidos (Entradas / VIP / Boxes)</span>
+                      <label className="bg-purple-600 hover:bg-purple-500 text-white text-[10px] px-3 py-1.5 rounded-lg font-black uppercase cursor-pointer shadow-lg transition active:scale-95">
+                        🖼️ {plantillaQrUrl ? 'Cambiar Fondo QR' : 'Subir Fondo QR'}
+                        <input type="file" accept="image/*" onChange={subirPlantillaQr} className="hidden" />
+                      </label>
                       <span className="text-xs bg-yellow-900/40 text-yellow-300 px-2 py-1 rounded">Total: {listasVip.length}</span>
                     </h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[260px] overflow-y-auto pr-2 custom-scrollbar">
