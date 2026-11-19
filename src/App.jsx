@@ -197,7 +197,7 @@ function App() {
     if (tipo === 'box') {
       await supabase.from('reservas_boxes').insert([{ 
         sesion_id: sId, 
-        nombre_cliente: `${pendiente.nombre} | DNI: ${pendiente.dni || '-'} | Tel: ${pendiente.tel || '-'}`, 
+        nombre_cliente: `${pendiente.nombre}${pendiente.tel ? ' | Tel: ' + pendiente.tel : ''}`, 
         box_nombre: `${pendiente.box_nombre || 'BOX VIP'} [QR: ${codigo}]`, 
         descripcion: pendiente.box_desc || '10 PULSERAS + MESA BOX', 
         estado: 'pendiente', 
@@ -400,7 +400,7 @@ function App() {
   const rescatarPagoManualMP = async (pago) => {
     const nombre = prompt(`Crear QR para el pago #${pago.id} ($${pago.monto}).\nIngresa Nombre y Apellido del cliente:`);
     if (!nombre || !nombre.trim()) return;
-    const dni = prompt("Ingresa el DNI (opcional):") || "";
+    const tel = prompt("Ingresa el número de Teléfono / WhatsApp (opcional):") || "";
     const esVip = (pago.descripcion || '').toUpperCase().includes('VIP');
     const esBox = (pago.descripcion || '').toUpperCase().includes('BOX') || (pago.descripcion || '').toUpperCase().includes('RESERVA');
     const tipo = esBox ? 'box' : (esVip ? 'vip' : 'general');
@@ -408,8 +408,8 @@ function App() {
     setLoading(true);
     const qr = await registrarCompraWebEnBD({
       nombre: nombre.trim(),
-      dni: dni.trim(),
-      tel: '',
+      dni: '',
+      tel: tel.replace(/\D/g, ''),
       tipo,
       cantidad: cant,
       precio_total: pago.monto,
@@ -453,14 +453,15 @@ function App() {
 
   const handleComprarEntrada = async (e) => {
     e.preventDefault();
-    if (!nombreWeb.trim() || !dniWeb.trim() || !telWeb.trim()) return alert("Por favor completa Nombre, DNI y WhatsApp");
+    const telLimpio = telWeb.replace(/\D/g, '');
+    if (!nombreWeb.trim() || telLimpio.length < 6) return alert("Por favor completa tu Nombre y un número de teléfono válido");
     setLoading(true);
     const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
     const totalPagar = precio * cantWeb;
     const datosCompra = { 
       nombre: nombreWeb.trim(), 
-      dni: dniWeb.trim(), 
-      tel: telWeb.trim(), 
+      dni: '', 
+      tel: telLimpio, 
       tipo: tipoWeb, 
       cantidad: cantWeb,
       precio_total: totalPagar
@@ -473,12 +474,13 @@ function App() {
     e.preventDefault();
     if (!boxSeleccionado) return;
     if ((boxSeleccionado.stock ?? 10) <= 0) return alert("⚠️ Este Box ya se encuentra agotado.");
-    if (!nombreWeb.trim() || !dniWeb.trim() || !telWeb.trim()) return alert("Por favor completa Nombre, DNI y WhatsApp");
+    const telLimpio = telWeb.replace(/\D/g, '');
+    if (!nombreWeb.trim() || telLimpio.length < 6) return alert("Por favor completa tu Nombre y un número de teléfono válido");
     setLoading(true);
     const datosCompra = { 
       nombre: nombreWeb.trim(), 
-      dni: dniWeb.trim(), 
-      tel: telWeb.trim(), 
+      dni: '', 
+      tel: telLimpio, 
       tipo: 'box', 
       cantidad: 10, 
       box_id: boxSeleccionado.id,
@@ -492,26 +494,59 @@ function App() {
 
   const recuperarQrPorDni = async (e) => {
     e.preventDefault();
-    if (!dniBusquedaWeb.trim()) return;
+    const telLimpio = dniBusquedaWeb.replace(/\D/g, '');
+    if (telLimpio.length < 6) return alert("⚠️ Ingresa un número de teléfono válido (al menos 6 dígitos).");
     setBuscandoQrWeb(true);
-    // Primero sincronizamos con Mercado Pago por si el cliente cerró la app sin volver
+
+    // Primero sincronizamos con Mercado Pago por si el cliente cerró la app antes de volver
     await sincronizarPagosWebMP();
-    const { data: encontrados } = await supabase.from('listas_vip').select('*').ilike('nombre', `%${dniBusquedaWeb.trim()}%`).order('id', { ascending: false }).limit(1);
-    if (!encontrados || encontrados.length === 0) {
-      setBuscandoQrWeb(false);
-      return alert("❌ No encontramos ningún acceso con ese DNI. Si acabas de pagar, aguarda unos segundos y vuelve a intentar.");
+
+    let item = null;
+    const { data: directos } = await supabase
+      .from('listas_vip')
+      .select('*')
+      .ilike('creado_por', `%${telLimpio}%`)
+      .order('id', { ascending: false })
+      .limit(1);
+
+    if (directos && directos.length > 0) {
+      item = directos[0];
+    } else {
+      // Búsqueda tolerante a espacios, guiones o prefijo +549 (sin mezclar con ID de MP)
+      const sufijoTel = telLimpio.slice(-7);
+      const { data: recientes } = await supabase
+        .from('listas_vip')
+        .select('*')
+        .order('id', { ascending: false })
+        .limit(300);
+      if (recientes) {
+        item = recientes.find(r => {
+          const soloTel = (r.creado_por || '').split('MP#')[0].replace(/\D/g, '');
+          return soloTel && soloTel.includes(sufijoTel);
+        });
+      }
     }
-    const item = encontrados[0];
+
+    if (!item) {
+      setBuscandoQrWeb(false);
+      return alert("❌ No encontramos ningún acceso con ese número de teléfono. Si acabas de pagar, aguarda unos segundos y vuelve a intentar.");
+    }
+
     let descBox = '';
     if (item.tipo_pase === 'box') {
       const { data: rBox } = await supabase.from('reservas_boxes').select('*').ilike('box_nombre', `%${item.codigo}%`).limit(1);
       if (rBox && rBox[0]) descBox = rBox[0].descripcion;
     }
+
+    const telEncontrado = (item.creado_por || '').includes('Tel:')
+      ? item.creado_por.split('Tel:')[1].split('|')[0].trim()
+      : telLimpio;
+
     setBuscandoQrWeb(false);
     setQrGenerado({
       nombre: item.nombre.split('|')[0].trim(),
-      dni: dniBusquedaWeb.trim(),
-      tel: (item.creado_por || '').includes('Tel:') ? item.creado_por.split('Tel:')[1].split('|')[0].trim() : '',
+      dni: '',
+      tel: telEncontrado,
       cantidad: item.cantidad,
       codigo: item.codigo,
       tipo_pase: item.tipo_pase,
@@ -521,7 +556,7 @@ function App() {
     });
   };
 
-  const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase, datosCompra) => {
+    const ejecutarPagoMP = async (titulo, precioTotal, cant, tipoPase, datosCompra) => {
     try {
       const resp = await fetch('/api/checkout', { 
         method: 'POST', 
@@ -643,7 +678,7 @@ function App() {
     const renderModalValidacionMP = () => {
     if (!modalMP) return null;
     return (
-      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Sincronizando...' : '🔄 Actualizar y Sincronizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center gap-2"><div className="flex-1 pr-2 min-w-0"><p className="font-bold text-white text-sm truncate">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} • Op #{String(t.id).slice(-6)}</p>{t.metadata?.nombre && <p className="text-[10px] text-purple-400 font-bold uppercase mt-0.5">👤 {t.metadata.nombre} (DNI: {t.metadata.dni})</p>}</div><div className="text-right shrink-0"><span className="font-black text-green-400 text-lg block">+$${t.monto}</span>{(user?.rol === 'admin' && (t.descripcion || '').toLowerCase().includes('entrada') || (t.descripcion || '').toLowerCase().includes('reserva')) && (<button onClick={() => rescatarPagoManualMP(t)} className="mt-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black uppercase px-2 py-1 rounded shadow">+ Crear QR</button>)}</div></div>))}</div></div></div>
+      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Sincronizando...' : '🔄 Actualizar y Sincronizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center gap-2"><div className="flex-1 pr-2 min-w-0"><p className="font-bold text-white text-sm truncate">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} • Op #{String(t.id).slice(-6)}</p>{t.metadata?.nombre && <p className="text-[10px] text-purple-400 font-bold uppercase mt-0.5">👤 {t.metadata.nombre} ({t.metadata.tel ? "Tel: " + t.metadata.tel : "DNI: " + (t.metadata.dni || "-")})</p>}</div><div className="text-right shrink-0"><span className="font-black text-green-400 text-lg block">+$${t.monto}</span>{(user?.rol === 'admin' && (t.descripcion || '').toLowerCase().includes('entrada') || (t.descripcion || '').toLowerCase().includes('reserva')) && (<button onClick={() => rescatarPagoManualMP(t)} className="mt-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black uppercase px-2 py-1 rounded shadow">+ Crear QR</button>)}</div></div>))}</div></div></div>
     );
   };
 
@@ -759,7 +794,7 @@ function App() {
     if (!numLimpio) return alert("⚠️ Este registro no tiene un número de teléfono guardado.");
     const numFinal = numLimpio.startsWith('54') ? numLimpio : '549' + numLimpio;
     const linkTienda = `${window.location.origin}/?tienda=true`;
-    const msg = encodeURIComponent(`¡Hola ${nombreCliente}! 🎉 Aquí tienes los datos de tu acceso oficial para *GJBROSS*:\n\n🔑 *Código QR:* ${codigoQr}\n🎫 *Pase:* ${tipoPase.toUpperCase()}\n\n📲 Puedes recuperar y descargar tu QR en cualquier momento ingresando tu DNI en nuestra Boletería Oficial:\n${linkTienda}`);
+    const msg = encodeURIComponent(`¡Hola ${nombreCliente}! 🎉 Aquí tienes los datos de tu acceso oficial para *GJBROSS*:\n\n🔑 *Código QR:* ${codigoQr}\n🎫 *Pase:* ${tipoPase.toUpperCase()}\n\n📲 Puedes recuperar y descargar tu QR en cualquier momento ingresando tu número de teléfono en nuestra Boletería Oficial:\n${linkTienda}`);
     window.open(`https://wa.me/${numFinal}?text=${msg}`, '_blank');
   };
 
@@ -899,10 +934,7 @@ function App() {
               <p className="text-xs text-gray-400 text-center mb-6">Completa tus datos para generar tu código QR de acceso</p>
               <form onSubmit={handleComprarEntrada} className="space-y-4">
                 <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: Juan Pérez" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">N° de DNI</label><input type="number" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: 40123456" value={dniWeb} onChange={e=>setDniWeb(e.target.value)} required /></div>
-                  <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">WhatsApp</label><input type="tel" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: 3718123456" value={telWeb} onChange={e=>setTelWeb(e.target.value)} required /></div>
-                </div>
+                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">WhatsApp / Teléfono</label><input type="tel" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Ej: 3718123456" value={telWeb} onChange={e=>setTelWeb(e.target.value)} required /></div>
                 <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Selecciona el Sector</label>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>General<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
@@ -929,7 +961,6 @@ function App() {
                   </div>
                   <form onSubmit={handleComprarBox} className="space-y-4">
                     <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Nombre y Apellido del Titular</label><input type="text" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-red-500" placeholder="Ej: Juan Pérez" value={nombreWeb} onChange={e=>setNombreWeb(e.target.value)} required /></div>
-                    <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">N° de DNI del Titular</label><input type="number" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-red-500" placeholder="Ej: 40123456" value={dniWeb} onChange={e=>setDniWeb(e.target.value)} required /></div>
                     <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Número de WhatsApp (Por consultas)</label><input type="tel" className="w-full px-4 py-3 rounded-xl bg-gray-700 text-white font-bold focus:outline-none focus:ring-2 focus:ring-red-500" placeholder="Ej: 3718123456" value={telWeb} onChange={e=>setTelWeb(e.target.value)} required /></div>
                     <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-black py-4 rounded-xl shadow-[0_0_20px_rgba(220,38,38,0.5)] uppercase text-lg transition active:scale-95">
                       💳 Pagar Box en Mercado Pago
@@ -971,9 +1002,9 @@ function App() {
           {/* RECUPERADOR DE QR POR DNI PARA CLIENTES */}
           <div className="max-w-md mx-auto mt-4 mb-12 bg-gray-800/80 p-6 rounded-3xl border border-gray-700 text-center shadow-xl">
             <h3 className="text-sm font-black text-purple-400 uppercase tracking-wider mb-1">🔍 ¿Ya compraste y cerraste la ventana?</h3>
-            <p className="text-xs text-gray-400 mb-4">Ingresa tu DNI para volver a ver y descargar tu código QR o Voucher Box</p>
+            <p className="text-xs text-gray-400 mb-4">Ingresa tu número de teléfono para volver a ver y descargar tu código QR o Voucher Box</p>
             <form onSubmit={recuperarQrPorDni} className="flex gap-2">
-              <input type="number" placeholder="Tu N° de DNI..." className="flex-1 bg-gray-900 border border-gray-700 px-4 py-3 rounded-xl text-white font-bold text-sm focus:outline-none focus:border-purple-500" value={dniBusquedaWeb} onChange={e => setDniBusquedaWeb(e.target.value)} required />
+              <input type="tel" placeholder="Tu N° de Teléfono..." className="flex-1 bg-gray-900 border border-gray-700 px-4 py-3 rounded-xl text-white font-bold text-sm focus:outline-none focus:border-purple-500" value={dniBusquedaWeb} onChange={e => setDniBusquedaWeb(e.target.value)} required />
               <button type="submit" disabled={buscandoQrWeb} className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-3 rounded-xl font-black uppercase text-xs shadow-lg transition active:scale-95">
                 {buscandoQrWeb ? '...' : 'Buscar QR'}
               </button>
@@ -1175,7 +1206,7 @@ function App() {
                         const matchQr = r.box_nombre.match(/\[QR:\s*([^\]]+)\]/);
                         const codQr = matchQr ? matchQr[1] : 'BOX-' + r.id;
                         const partesCliente = r.nombre_cliente.split('|');
-                        const telCliente = partesCliente[2] ? partesCliente[2].replace('Tel:', '').trim() : '';
+                        const telMatch = r.nombre_cliente.match(/Tel:\s*([^|]+)/); const telCliente = telMatch ? telMatch[1].trim() : '';
                         return (
                           <div key={r.id} className="bg-gray-800 p-3 rounded-xl border border-red-900/60 flex flex-col justify-between gap-2">
                             <div>
@@ -1260,7 +1291,7 @@ function App() {
   }
 
     if (vista === 'puerta' || user.rol === 'puerta') {
-    const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()));
+    const listasFiltradas = listasVip.filter(l => l.nombre.toLowerCase().includes(filtroQR.toLowerCase()) || l.codigo.toLowerCase().includes(filtroQR.toLowerCase()) || (l.creado_por || "").toLowerCase().includes(filtroQR.toLowerCase()));
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4 lg:p-8">
         {barraHeader}{renderModalValidacionMP()}
@@ -1275,7 +1306,7 @@ function App() {
             )}
             <div className={`space-y-6 ${user.rol === 'puerta' ? 'lg:col-span-2 max-w-xl mx-auto w-full' : ''}`}>
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl"><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">Gratis (Adentro)</p><p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p></div><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">QRs Activos</p><p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p></div></div>
-              <div className="flex gap-3"><div className="relative flex-1"><input type="text" placeholder="Escribe DNI o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} /><span className="absolute left-4 top-4 text-xl">🔍</span></div><button onClick={() => setMostrarEscaner(true)} disabled={!isOnline} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center disabled:opacity-50">📷</button></div>
+              <div className="flex gap-3"><div className="relative flex-1"><input type="text" placeholder="Escribe Nombre, Teléfono o Código..." className="w-full bg-gray-800 p-4 pl-12 rounded-xl border border-gray-700 font-black text-lg focus:outline-none focus:border-purple-500 shadow-inner" value={filtroQR} onChange={e => setFiltroQR(e.target.value)} /><span className="absolute left-4 top-4 text-xl">🔍</span></div><button onClick={() => setMostrarEscaner(true)} disabled={!isOnline} className="bg-purple-600 hover:bg-purple-500 px-6 rounded-xl font-black text-3xl shadow-[0_0_15px_rgba(147,51,234,0.5)] transition active:scale-95 flex items-center justify-center disabled:opacity-50">📷</button></div>
               <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl h-[60vh] flex flex-col"><h2 className="text-xl font-black uppercase text-white mb-4 border-b border-gray-700 pb-2">📋 Listas y Accesos</h2><div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">{listasFiltradas.length === 0 ? <p className="text-center text-gray-500 py-10 font-bold uppercase">No hay pases generados.</p> : listasFiltradas.map(l => (<div key={l.id} className={`p-5 rounded-2xl border-2 transition ${l.estado === 'ingresado' ? 'bg-green-900/10 border-green-900/50 opacity-50' : 'bg-gray-800 border-gray-600 shadow-lg'}`}><div className="flex justify-between items-start"><div><p className="font-black text-lg uppercase text-white leading-tight">{l.nombre}</p><p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">{l.tipo_pase} | Cód: <span className="text-yellow-400 font-bold">{l.codigo}</span></p><p className="text-sm text-blue-400 font-bold mt-2">Ingresados: {l.ingresados || 0} / {l.cantidad}</p></div>{user.rol === 'admin' && (<button onClick={() => descargarInvitacion(l)} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg shadow transition">⬇️ QR</button>)}</div>{l.estado === 'ingresado' ? (<div className="mt-3 text-center bg-green-900/40 py-2 rounded-lg"><span className="text-green-500 font-black text-sm uppercase">✅ Completado</span></div>) : (<button onClick={() => procesarEscaneoAutomatico(l.codigo)} disabled={!isOnline} className="w-full mt-3 bg-purple-600 hover:bg-purple-500 py-3 rounded-xl font-black text-sm uppercase shadow-lg active:scale-95 transition disabled:opacity-50">Ingreso Parcial (+)</button>)}</div>))}</div></div>
             </div>
           </div>
