@@ -623,7 +623,7 @@ function App() {
 
         ctx.fillStyle = '#ffffff';
         ctx.font = '42px sans-serif';
-        ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 955);
+        ctx.fillText(Number(qrData.cantidad) === 1 ? 'Válido para un Acceso de Conservadora' : `Válido para ${qrData.cantidad} Accesos de Conservadora`, 540, 955, 920);
       } else {
         ctx.fillStyle = '#fbbf24';
         ctx.font = 'bold 64px sans-serif';
@@ -631,7 +631,7 @@ function App() {
 
         ctx.fillStyle = '#ffffff';
         ctx.font = '44px sans-serif';
-        ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 940);
+        ctx.fillText(`Válido para ${qrData.cantidad} ${Number(qrData.cantidad) === 1 ? 'persona' : 'personas'}`, 540, 940, 920);
       }
       ctx.restore();
 
@@ -880,7 +880,7 @@ function App() {
             {qrGenerado.dni && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">DNI:</span><span className="font-black text-white">{qrGenerado.dni}</span></div>}
             {qrGenerado.tel && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">WhatsApp:</span><span className="font-black text-white">{qrGenerado.tel}</span></div>}
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 PASE CONSERVADORA' : '🎫 ACCESO QR')}</span></div>
-            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.cantidad} Personas</span></div>
+            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.tipo_pase === 'vip' ? (Number(qrGenerado.cantidad) === 1 ? 'Un Acceso de Conservadora' : `${qrGenerado.cantidad} Accesos de Conservadora`) : `${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Persona' : 'Personas'}`}</span></div>
             <div className="flex justify-between"><span className="text-gray-400 font-bold uppercase">Código Único:</span><span className="font-black text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded">{qrGenerado.codigo}</span></div>
             {qrGenerado.tipo_pase === 'box' && qrGenerado.box_desc && (
               <div className="pt-3 mt-2 border-t border-gray-800">
