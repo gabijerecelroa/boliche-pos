@@ -576,14 +576,28 @@ function App() {
       ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
       ctx.shadowBlur = 12;
 
-      // ARRIBA DEL RECUADRO: Nombre del titular y cantidad de personas
-      ctx.fillStyle = '#fbbf24';
-      ctx.font = 'bold 64px sans-serif';
-      ctx.fillText(nombreLimpio, 540, 860, 920);
+      // ARRIBA DEL RECUADRO: Conservadora agrega título; General queda exactamente igual
+      if (qrData.tipo_pase === 'vip') {
+        ctx.fillStyle = '#4ade80';
+        ctx.font = 'bold 50px sans-serif';
+        ctx.fillText('PASE DE CONSERVADORA', 540, 795, 920);
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '44px sans-serif';
-      ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 940);
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 62px sans-serif';
+        ctx.fillText(nombreLimpio, 540, 885, 920);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '42px sans-serif';
+        ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 955);
+      } else {
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 64px sans-serif';
+        ctx.fillText(nombreLimpio, 540, 860, 920);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '44px sans-serif';
+        ctx.fillText(`Válido para ${qrData.cantidad} personas`, 540, 940);
+      }
       ctx.restore();
 
       // ADENTRO DEL RECUADRO (x: 211..883, y: 1020..1620): Centramos el QR
@@ -830,7 +844,7 @@ function App() {
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Titular:</span><span className="font-black text-white uppercase text-right">{qrGenerado.nombre}</span></div>
             {qrGenerado.dni && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">DNI:</span><span className="font-black text-white">{qrGenerado.dni}</span></div>}
             {qrGenerado.tel && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">WhatsApp:</span><span className="font-black text-white">{qrGenerado.tel}</span></div>}
-            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '👑 PASE VIP' : '🎫 ENTRADA GENERAL')}</span></div>
+            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 PASE DE CONSERVADORA' : '🎫 ENTRADA GENERAL')}</span></div>
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.cantidad} Personas</span></div>
             <div className="flex justify-between"><span className="text-gray-400 font-bold uppercase">Código Único:</span><span className="font-black text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded">{qrGenerado.codigo}</span></div>
             {qrGenerado.tipo_pase === 'box' && qrGenerado.box_desc && (
@@ -1257,7 +1271,7 @@ function App() {
         {!sesionActiva ? (<div className="flex-1 flex flex-col items-center justify-center text-center mt-20"><p className="text-6xl mb-4">🔒</p><h2 className="text-2xl font-bold text-red-400">En Espera</h2></div>) : (
           <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6">
             {(user.rol === 'admin' || user.rol === 'puerta') && (
-              <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit"><div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div><h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>{user.rol === 'puerta' ? <p className="text-sm font-bold text-yellow-400 bg-yellow-900/30 p-2 rounded-lg mb-6 border border-yellow-800">🎟️ TU CUPO DISPONIBLE: {user.cupo_listas} Pases</p> : <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>}<form onSubmit={generarQRLista} className="space-y-6 relative z-10"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button><button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>VIP / Accesos</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Juan Pérez" /></div><div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4 disabled:opacity-50">Generar Pase ✨</button></form></div>
+              <div className="bg-gray-800 p-8 rounded-3xl border border-gray-700 shadow-2xl relative overflow-hidden h-fit"><div className="absolute top-0 right-0 w-40 h-40 bg-purple-600/10 rounded-bl-full pointer-events-none"></div><h2 className="text-2xl font-black uppercase text-purple-400 mb-2 flex items-center gap-2">📱 Generador de Pases (QR)</h2>{user.rol === 'puerta' ? <p className="text-sm font-bold text-yellow-400 bg-yellow-900/30 p-2 rounded-lg mb-6 border border-yellow-800">🎟️ TU CUPO DISPONIBLE: {user.cupo_listas} Pases</p> : <p className="text-sm text-gray-400 mb-6">Genera invitaciones digitales para enviar por WhatsApp.</p>}<form onSubmit={generarQRLista} className="space-y-6 relative z-10"><div><label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Categoría de la Invitación</label><div className="flex space-x-2"><button type="button" onClick={() => setTipoPaseQr('general')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'general' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Entrada General</button><button type="button" onClick={() => setTipoPaseQr('vip')} className={`flex-1 py-3 rounded-xl font-black uppercase transition ${tipoPaseQr === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Pase de Conservadora</button></div></div><div><label className="text-xs text-gray-400 font-bold uppercase">Nombre del Titular</label><input type="text" className="w-full bg-gray-700 p-4 rounded-xl font-black mt-1 focus:outline-none focus:ring-2 focus:ring-purple-500" value={nombreLista} onChange={e => setNombreLista(e.target.value)} required placeholder="Ej: Juan Pérez" /></div><div><label className="text-xs text-gray-400 font-bold uppercase">Total de Personas (+Acompañantes)</label><div className="flex items-center mt-1 shadow-inner"><button type="button" onClick={() => setCantLista(Math.max(1, cantLista - 1))} className="bg-gray-600 w-1/3 py-4 rounded-l-xl font-black text-2xl active:bg-gray-500">-</button><input type="number" className="w-1/3 bg-gray-700 py-4 text-center font-black text-purple-400 text-2xl focus:outline-none" value={cantLista} readOnly /><button type="button" onClick={() => setCantLista(cantLista + 1)} className="bg-gray-600 w-1/3 py-4 rounded-r-xl font-black text-2xl active:bg-gray-500">+</button></div></div><button type="submit" disabled={loading || !isOnline} className="w-full bg-purple-600 hover:bg-purple-500 py-5 rounded-2xl font-black text-xl uppercase shadow-[0_0_20px_rgba(147,51,234,0.4)] transition active:scale-95 mt-4 disabled:opacity-50">Generar Pase ✨</button></form></div>
             )}
             <div className={`space-y-6 ${user.rol === 'puerta' ? 'lg:col-span-2 max-w-xl mx-auto w-full' : ''}`}>
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex justify-between shadow-xl"><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">Gratis (Adentro)</p><p className="text-4xl font-black text-green-400">{personasListaIngresadas}</p></div><div className="text-center"><p className="text-xs text-gray-400 font-bold uppercase">QRs Activos</p><p className="text-4xl font-black text-yellow-400">{listasVip.filter(l => l.estado === 'pendiente').length}</p></div></div>
