@@ -456,8 +456,7 @@ function App() {
     const telLimpio = telWeb.replace(/\D/g, '');
     if (!nombreWeb.trim() || telLimpio.length < 6) return alert("Por favor completa tu Nombre y un número de teléfono válido");
     setLoading(true);
-    const precio = tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip;
-    const totalPagar = precio * cantWeb;
+    const totalPagar = tipoWeb === 'general' ? preciosWeb.general * cantWeb : preciosWeb.vip + Math.max(0, cantWeb - 1) * preciosWeb.general;
     const datosCompra = { 
       nombre: nombreWeb.trim(), 
       dni: '', 
@@ -467,7 +466,7 @@ function App() {
       precio_total: totalPagar
     };
     localStorage.setItem('compra_pendiente', JSON.stringify(datosCompra));
-    ejecutarPagoMP(tipoWeb === 'vip' ? 'PASE CONSERVADORA GJBROSS' : 'ACCESO QR GJBROSS', totalPagar, cantWeb, tipoWeb, datosCompra);
+    ejecutarPagoMP(tipoWeb === 'vip' ? `1 PASE DE CONSERVADORA + ${cantWeb} ${cantWeb === 1 ? 'ENTRADA' : 'ENTRADAS'} GJBROSS` : 'ACCESO QR GJBROSS', totalPagar, tipoWeb === 'vip' ? 1 : cantWeb, tipoWeb, datosCompra);
   };
 
   const handleComprarBox = async (e) => {
@@ -614,8 +613,8 @@ function App() {
       // ARRIBA DEL RECUADRO: Conservadora agrega título; General queda exactamente igual
       if (qrData.tipo_pase === 'vip') {
         ctx.fillStyle = '#4ade80';
-        ctx.font = 'bold 50px sans-serif';
-        ctx.fillText('PASE DE CONSERVADORA', 540, 795, 920);
+        ctx.font = 'bold 44px sans-serif';
+        ctx.fillText('PASE DE CONSERVADORA + ENTRADA', 540, 795, 920);
 
         ctx.fillStyle = '#fbbf24';
         ctx.font = 'bold 62px sans-serif';
@@ -623,7 +622,7 @@ function App() {
 
         ctx.fillStyle = '#ffffff';
         ctx.font = '42px sans-serif';
-        ctx.fillText(Number(qrData.cantidad) === 1 ? 'Válido para un Acceso de Conservadora' : `Válido para ${qrData.cantidad} Accesos de Conservadora`, 540, 955, 920);
+        ctx.fillText(`1 Pase de Conservadora + ${Number(qrData.cantidad) || 1} ${(Number(qrData.cantidad) || 1) === 1 ? 'Entrada' : 'Entradas'}`, 540, 955, 920);
       } else {
         ctx.fillStyle = '#fbbf24';
         ctx.font = 'bold 64px sans-serif';
@@ -879,8 +878,8 @@ function App() {
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Titular:</span><span className="font-black text-white uppercase text-right">{qrGenerado.nombre}</span></div>
             {qrGenerado.dni && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">DNI:</span><span className="font-black text-white">{qrGenerado.dni}</span></div>}
             {qrGenerado.tel && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">WhatsApp:</span><span className="font-black text-white">{qrGenerado.tel}</span></div>}
-            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 PASE CONSERVADORA' : '🎫 ACCESO QR')}</span></div>
-            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.tipo_pase === 'vip' ? (Number(qrGenerado.cantidad) === 1 ? 'Un Acceso de Conservadora' : `${qrGenerado.cantidad} Accesos de Conservadora`) : `${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Persona' : 'Personas'}`}</span></div>
+            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 PASE DE CONSERVADORA + ENTRADA' : '🎫 ACCESO QR')}</span></div>
+            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.tipo_pase === 'vip' ? `1 Pase de Conservadora + ${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Entrada' : 'Entradas'}` : `${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Persona' : 'Personas'}`}</span></div>
             <div className="flex justify-between"><span className="text-gray-400 font-bold uppercase">Código Único:</span><span className="font-black text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded">{qrGenerado.codigo}</span></div>
             {qrGenerado.tipo_pase === 'box' && qrGenerado.box_desc && (
               <div className="pt-3 mt-2 border-t border-gray-800">
@@ -938,13 +937,19 @@ function App() {
                 <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Selecciona el Sector</label>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 px-2 text-xs sm:text-sm leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>ACCESO QR<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
-                    <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 px-2 text-xs sm:text-sm leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>PASE CONSERVADORA<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
+                    <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 px-2 text-[11px] sm:text-xs leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>PASE DE CONSERVADORA + ENTRADA<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
                   </div>
                 </div>
-                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Cantidad de Entradas</label>
+                {tipoWeb === 'vip' && (
+                  <div className="bg-purple-900/40 border border-purple-500/60 p-3 rounded-xl text-center">
+                    <p className="text-xs font-black text-purple-300 uppercase">🧊 Incluye 1 Pase de Conservadora</p>
+                    <p className="text-[11px] text-gray-200 mt-1 leading-snug">Abajo elige la <b>cantidad de entradas</b> que necesitas. Tu QR vendrá con <b>1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</b>.</p>
+                  </div>
+                )}
+                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">{tipoWeb === 'vip' ? 'Cantidad de Entradas (Incluye 1 Pase de Conservadora)' : 'Cantidad de Entradas'}</label>
                   <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">+</button></div>
                 </div>
-                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${(tipoWeb==='general'?preciosWeb.general:preciosWeb.vip) * cantWeb}</span></div>
+                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${tipoWeb === 'general' ? preciosWeb.general * cantWeb : preciosWeb.vip + Math.max(0, cantWeb - 1) * preciosWeb.general}</span>{tipoWeb === 'vip' && <span className="text-[11px] font-bold text-purple-300 block mt-1 uppercase">1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</span>}</div>
                 <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl shadow-lg transition active:scale-95 uppercase">💳 Pagar con Mercado Pago</button>
               </form>
             </div>
