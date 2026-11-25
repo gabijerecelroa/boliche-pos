@@ -456,7 +456,7 @@ function App() {
     const telLimpio = telWeb.replace(/\D/g, '');
     if (!nombreWeb.trim() || telLimpio.length < 6) return alert("Por favor completa tu Nombre y un número de teléfono válido");
     setLoading(true);
-    const totalPagar = tipoWeb === 'general' ? preciosWeb.general * cantWeb : preciosWeb.vip + Math.max(0, cantWeb - 1) * preciosWeb.general;
+    const totalPagar = (tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip) * cantWeb;
     const datosCompra = { 
       nombre: nombreWeb.trim(), 
       dni: '', 
@@ -949,7 +949,7 @@ function App() {
                 <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">{tipoWeb === 'vip' ? 'Cantidad de Entradas (Incluye 1 Pase de Conservadora)' : 'Cantidad de Entradas'}</label>
                   <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">+</button></div>
                 </div>
-                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${tipoWeb === 'general' ? preciosWeb.general * cantWeb : preciosWeb.vip + Math.max(0, cantWeb - 1) * preciosWeb.general}</span>{tipoWeb === 'vip' && <span className="text-[11px] font-bold text-purple-300 block mt-1 uppercase">1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</span>}</div>
+                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${(tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip) * cantWeb}</span>{tipoWeb === 'vip' && <span className="text-[11px] font-bold text-purple-300 block mt-1 uppercase">1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</span>}</div>
                 <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl shadow-lg transition active:scale-95 uppercase">💳 Pagar con Mercado Pago</button>
               </form>
             </div>
