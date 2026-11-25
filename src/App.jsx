@@ -456,17 +456,25 @@ function App() {
     const telLimpio = telWeb.replace(/\D/g, '');
     if (!nombreWeb.trim() || telLimpio.length < 6) return alert("Por favor completa tu Nombre y un número de teléfono válido");
     setLoading(true);
-    const totalPagar = (tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip) * cantWeb;
+    const esCombo = tipoWeb === 'vip';
+    const cantFinal = esCombo ? 6 : cantWeb;
+    const totalPagar = esCombo ? preciosWeb.vip : preciosWeb.general * cantWeb;
     const datosCompra = { 
       nombre: nombreWeb.trim(), 
       dni: '', 
       tel: telLimpio, 
       tipo: tipoWeb, 
-      cantidad: cantWeb,
+      cantidad: cantFinal,
       precio_total: totalPagar
     };
     localStorage.setItem('compra_pendiente', JSON.stringify(datosCompra));
-    ejecutarPagoMP(tipoWeb === 'vip' ? `1 PASE DE CONSERVADORA + ${cantWeb} ${cantWeb === 1 ? 'ENTRADA' : 'ENTRADAS'} GJBROSS` : 'ACCESO QR GJBROSS', totalPagar, tipoWeb === 'vip' ? 1 : cantWeb, tipoWeb, datosCompra);
+    ejecutarPagoMP(
+      esCombo ? 'COMBO PASE DE CONSERVADORA + 6 ENTRADAS GJBROSS' : 'ACCESO QR GJBROSS',
+      totalPagar,
+      esCombo ? 1 : cantWeb,
+      tipoWeb,
+      datosCompra
+    );
   };
 
   const handleComprarBox = async (e) => {
@@ -613,8 +621,8 @@ function App() {
       // ARRIBA DEL RECUADRO: Conservadora agrega título; General queda exactamente igual
       if (qrData.tipo_pase === 'vip') {
         ctx.fillStyle = '#4ade80';
-        ctx.font = 'bold 44px sans-serif';
-        ctx.fillText('PASE DE CONSERVADORA + ENTRADA', 540, 795, 920);
+        ctx.font = 'bold 38px sans-serif';
+        ctx.fillText('COMBO PASE DE CONSERVADORA + 6 ENTRADAS', 540, 795, 920);
 
         ctx.fillStyle = '#fbbf24';
         ctx.font = 'bold 62px sans-serif';
@@ -677,7 +685,7 @@ function App() {
     const renderModalValidacionMP = () => {
     if (!modalMP) return null;
     return (
-      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Sincronizando...' : '🔄 Actualizar y Sincronizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center gap-2"><div className="flex-1 pr-2 min-w-0"><p className="font-bold text-white text-sm truncate">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} • Op #{String(t.id).slice(-6)}</p>{t.metadata?.nombre && <p className="text-[10px] text-purple-400 font-bold uppercase mt-0.5">👤 {t.metadata.nombre} ({t.metadata.tel ? "Tel: " + t.metadata.tel : "DNI: " + (t.metadata.dni || "-")})</p>}</div><div className="text-right shrink-0"><span className="font-black text-green-400 text-lg block">+$${t.monto}</span>{(user?.rol === 'admin' && ['entrada', 'reserva', 'acceso', 'conservadora'].some(k => (t.descripcion || '').toLowerCase().includes(k))) && (<button onClick={() => rescatarPagoManualMP(t)} className="mt-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black uppercase px-2 py-1 rounded shadow">+ Crear QR</button>)}</div></div>))}</div></div></div>
+      <div className="fixed inset-0 bg-black/80 z-[105] flex items-center justify-center p-4"><div className="bg-gray-800 p-6 rounded-3xl border border-[#009EE3] w-full max-w-md max-h-[80vh] flex flex-col"><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-3"><h2 className="text-lg font-black uppercase text-[#009EE3]">📱 Pagos Recientes</h2><button onClick={() => setModalMP(false)} className="text-gray-400 hover:text-red-500 font-black text-xl">✖</button></div><div className="flex gap-2 mb-4"><button onClick={cargarTransferenciasMP} disabled={cargandoMP} className="flex-[2] bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-3 rounded-xl uppercase text-sm">{cargandoMP ? 'Sincronizando...' : '🔄 Actualizar y Sincronizar'}</button><button onClick={() => window.open('https://www.mercadopago.com.ar/activities', '_blank')} className="flex-[1] bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-3 rounded-xl text-[10px] uppercase text-center leading-tight">Ver MP<br/>Oficial</button></div><div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">{transfMP.length === 0 && !cargandoMP ? <p className="text-center text-gray-500 font-bold uppercase mt-8 text-sm">Sin cobros</p> : transfMP.map(t => (<div key={t.id} className="bg-gray-700/50 p-4 rounded-xl flex justify-between items-center gap-2"><div className="flex-1 pr-2 min-w-0"><p className="font-bold text-white text-sm truncate">{t.descripcion}</p><p className="text-[10px] text-gray-400 mt-1 uppercase">{t.fecha} • Op #{String(t.id).slice(-6)}</p>{t.metadata?.nombre && <p className="text-[10px] text-purple-400 font-bold uppercase mt-0.5">👤 {t.metadata.nombre} ({t.metadata.tel ? "Tel: " + t.metadata.tel : "DNI: " + (t.metadata.dni || "-")})</p>}</div><div className="text-right shrink-0"><span className="font-black text-green-400 text-lg block">+$${t.monto}</span>{(user?.rol === 'admin' && ['entrada', 'reserva', 'acceso', 'conservadora', 'combo'].some(k => (t.descripcion || '').toLowerCase().includes(k))) && (<button onClick={() => rescatarPagoManualMP(t)} className="mt-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black uppercase px-2 py-1 rounded shadow">+ Crear QR</button>)}</div></div>))}</div></div></div>
     );
   };
 
@@ -878,7 +886,7 @@ function App() {
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Titular:</span><span className="font-black text-white uppercase text-right">{qrGenerado.nombre}</span></div>
             {qrGenerado.dni && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">DNI:</span><span className="font-black text-white">{qrGenerado.dni}</span></div>}
             {qrGenerado.tel && <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">WhatsApp:</span><span className="font-black text-white">{qrGenerado.tel}</span></div>}
-            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 PASE DE CONSERVADORA + ENTRADA' : '🎫 ACCESO QR')}</span></div>
+            <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Tipo de Pase:</span><span className="font-black text-yellow-400 uppercase">{qrGenerado.tipo_pase === 'box' ? `🛋️ ${qrGenerado.box_nombre || 'BOX VIP'}` : (qrGenerado.tipo_pase === 'vip' ? '🧊 COMBO PASE DE CONSERVADORA + 6 ENTRADAS' : '🎫 ACCESO QR')}</span></div>
             <div className="flex justify-between border-b border-gray-800 pb-2"><span className="text-gray-400 font-bold uppercase">Capacidad:</span><span className="font-black text-green-400">{qrGenerado.tipo_pase === 'vip' ? `1 Pase de Conservadora + ${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Entrada' : 'Entradas'}` : `${qrGenerado.cantidad} ${Number(qrGenerado.cantidad) === 1 ? 'Persona' : 'Personas'}`}</span></div>
             <div className="flex justify-between"><span className="text-gray-400 font-bold uppercase">Código Único:</span><span className="font-black text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded">{qrGenerado.codigo}</span></div>
             {qrGenerado.tipo_pase === 'box' && qrGenerado.box_desc && (
@@ -937,19 +945,24 @@ function App() {
                 <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Selecciona el Sector</label>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => setTipoWeb('general')} className={`flex-1 py-3 px-2 text-xs sm:text-sm leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'general' ? 'bg-[#009EE3] text-white' : 'bg-gray-700 text-gray-400'}`}>ACCESO QR<br/><span className="text-xs font-normal">${preciosWeb.general}</span></button>
-                    <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 px-2 text-[11px] sm:text-xs leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>PASE DE CONSERVADORA + ENTRADA<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
+                    <button type="button" onClick={() => setTipoWeb('vip')} className={`flex-1 py-3 px-2 text-[10px] sm:text-xs leading-tight rounded-xl font-black uppercase transition ${tipoWeb === 'vip' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>COMBO PASE DE CONSERVADORA + 6 ENTRADAS<br/><span className="text-xs font-normal">${preciosWeb.vip}</span></button>
                   </div>
                 </div>
-                {tipoWeb === 'vip' && (
-                  <div className="bg-purple-900/40 border border-purple-500/60 p-3 rounded-xl text-center">
-                    <p className="text-xs font-black text-purple-300 uppercase">🧊 Incluye 1 Pase de Conservadora</p>
-                    <p className="text-[11px] text-gray-200 mt-1 leading-snug">Abajo elige la <b>cantidad de entradas</b> que necesitas. Tu QR vendrá con <b>1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</b>.</p>
+                {tipoWeb === 'vip' ? (
+                  <div className="bg-purple-900/40 border border-purple-500/60 p-4 rounded-xl text-center">
+                    <p className="text-xs font-black text-purple-300 uppercase">🧊 COMBO PASE DE CONSERVADORA + 6 ENTRADAS</p>
+                    <p className="text-[11px] text-gray-200 mt-1 leading-snug">Incluye <b>1 Pase de Conservadora + 6 Entradas</b> en un solo código QR.</p>
+                  </div>
+                ) : (
+                  <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">Cantidad de Entradas</label>
+                    <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">+</button></div>
                   </div>
                 )}
-                <div><label className="text-xs text-gray-400 font-bold uppercase block mb-1">{tipoWeb === 'vip' ? 'Cantidad de Entradas (Incluye 1 Pase de Conservadora)' : 'Cantidad de Entradas'}</label>
-                  <div className="flex items-center shadow-inner rounded-xl overflow-hidden"><button type="button" onClick={() => setCantWeb(Math.max(1, cantWeb - 1))} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">-</button><input type="number" className="w-1/3 bg-gray-700 py-3 text-center font-black text-2xl text-white focus:outline-none" value={cantWeb} readOnly /><button type="button" onClick={() => setCantWeb(cantWeb + 1)} className="bg-gray-600 w-1/3 py-3 font-black text-2xl text-white">+</button></div>
+                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center">
+                  <span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span>
+                  <span className="text-4xl font-black text-green-400">${tipoWeb === 'vip' ? preciosWeb.vip : preciosWeb.general * cantWeb}</span>
+                  {tipoWeb === 'vip' && <span className="text-[11px] font-bold text-purple-300 block mt-1 uppercase">COMBO PASE DE CONSERVADORA + 6 ENTRADAS</span>}
                 </div>
-                <div className="bg-black/50 p-4 rounded-xl border border-gray-600 text-center"><span className="text-sm font-bold text-gray-400 block uppercase mb-1">Total a Pagar</span><span className="text-4xl font-black text-green-400">${(tipoWeb === 'general' ? preciosWeb.general : preciosWeb.vip) * cantWeb}</span>{tipoWeb === 'vip' && <span className="text-[11px] font-bold text-purple-300 block mt-1 uppercase">1 Pase de Conservadora + {cantWeb} {cantWeb === 1 ? 'Entrada' : 'Entradas'}</span>}</div>
                 <button type="submit" disabled={loading} className="w-full bg-[#009EE3] hover:bg-[#008ACA] text-white font-black py-4 rounded-xl shadow-lg transition active:scale-95 uppercase">💳 Pagar con Mercado Pago</button>
               </form>
             </div>
